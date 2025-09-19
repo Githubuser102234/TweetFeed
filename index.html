@@ -118,7 +118,8 @@
             serverTimestamp,
             getDocs,
             updateDoc,
-            deleteDoc
+            deleteDoc,
+            runTransaction
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
         let db;
@@ -354,40 +355,39 @@
                 return;
             }
 
-            const usersColRef = collection(db, 'artifacts', appId, 'users');
-            
-            // To check for unique usernames, we have to get all user profiles and check locally.
-            // There is no efficient Firestore query for subcollection fields.
-            const allUsersSnap = await getDocs(usersColRef);
-            let usernameExists = false;
-            for (const userDoc of allUsersSnap.docs) {
-                const profileRef = doc(userDoc.ref, 'profile', 'data');
-                const profileSnap = await getDoc(profileRef);
-                if (profileSnap.exists() && profileSnap.data().username === username) {
-                    usernameExists = true;
-                    break;
-                }
-            }
+            try {
+                // Use a Firestore transaction to ensure both writes succeed or fail together
+                await runTransaction(db, async (transaction) => {
+                    const usernamesRef = doc(db, 'artifacts', appId, 'public', 'data', 'usernames', username);
+                    const usernameSnap = await transaction.get(usernamesRef);
 
-            if (usernameExists) {
-                await showModal("Error", "Username already taken. Please choose another.");
-                return;
-            }
+                    if (usernameSnap.exists()) {
+                        throw new Error("Username already taken. Please choose another.");
+                    }
+                    
+                    const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                    const newProfile = {
+                        displayName: displayName || auth.currentUser.displayName,
+                        username: username,
+                        bio: bio,
+                        photoURL: auth.currentUser.photoURL,
+                        email: auth.currentUser.email,
+                        createdAt: serverTimestamp(),
+                        isBanned: false
+                    };
 
-            const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
-            const newProfile = {
-                displayName: displayName || auth.currentUser.displayName,
-                username: username,
-                bio: bio,
-                photoURL: auth.currentUser.photoURL,
-                email: auth.currentUser.email,
-                createdAt: serverTimestamp(),
-                isBanned: false
-            };
-            await setDoc(userDocRef, newProfile);
-            userProfile = newProfile;
-            window.history.pushState({}, '', '/');
-            handleUrlChange();
+                    transaction.set(userDocRef, newProfile);
+                    transaction.set(usernamesRef, { userId: userId, displayName: newProfile.displayName });
+                    
+                    userProfile = newProfile;
+                });
+                
+                window.history.pushState({}, '', '/');
+                handleUrlChange();
+            } catch (error) {
+                console.error("Error creating profile:", error);
+                await showModal("Error", error.message || "Failed to create profile. Please try again.");
+            }
         }
 
         // --- New View for Profile Editing ---
@@ -603,64 +603,62 @@
         
         function renderUserProfilePage(username) {
             mainContent.innerHTML = `<div class="p-6 text-center text-gray-500">Loading profile...</div>`;
-            const usersColRef = collection(db, 'artifacts', appId, 'users');
             
-            // FIX: Refactored to fetch all user documents and then check their sub-collection
-            // for the correct username. This avoids the invalid Firestore query.
-            getDocs(usersColRef).then(async (usersSnap) => {
-                let profileFound = false;
-                for (const userDoc of usersSnap.docs) {
-                    const profileDataRef = doc(userDoc.ref, 'profile', 'data');
-                    const profileSnap = await getDoc(profileDataRef);
-                    
-                    if (profileSnap.exists() && profileSnap.data().username === username) {
-                        profileFound = true;
-                        const profile = profileSnap.data();
-                        const profileUserId = userDoc.id;
+            // NEW FIX: Use the public usernames collection to find the user ID,
+            // then get the private profile document.
+            const usernameRef = doc(db, 'artifacts', appId, 'public', 'data', 'usernames', username);
+            getDoc(usernameRef).then(async (usernameSnap) => {
+                if (!usernameSnap.exists()) {
+                    mainContent.innerHTML = `<div class="p-6 text-center text-red-500">User @${username} not found.</div>`;
+                    return;
+                }
+                
+                const profileUserId = usernameSnap.data().userId;
+                const profileDataRef = doc(db, 'artifacts', appId, 'users', profileUserId, 'profile', 'data');
+                const profileSnap = await getDoc(profileDataRef);
 
-                        if (profile.isBanned) {
-                            mainContent.innerHTML = `
-                                <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
-                                    <i class="fa-solid fa-ban text-6xl text-red-500 mb-4"></i>
-                                    <h2 class="text-xl font-bold text-gray-800">Account Banned</h2>
-                                    <p class="text-gray-600 mb-2">@${profile.username}</p>
-                                    <p class="text-gray-400">This account is no longer active.</p>
-                                </div>
-                            `;
-                            return;
-                        }
-
+                if (profileSnap.exists()) {
+                    const profile = profileSnap.data();
+                    if (profile.isBanned) {
                         mainContent.innerHTML = `
                             <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
-                                <img src="${profile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
-                                <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
-                                <p class="text-gray-600 mb-2">@${profile?.username}</p>
-                                <p class="text-gray-600 mb-2">${profile?.bio}</p>
-                                <div class="flex justify-center space-x-2 mt-4">
-                                    ${profileUserId === userId ? `
-                                        <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
-                                    ` : ''}
-                                    <button id="share-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
-                                </div>
+                                <i class="fa-solid fa-ban text-6xl text-red-500 mb-4"></i>
+                                <h2 class="text-xl font-bold text-gray-800">Account Banned</h2>
+                                <p class="text-gray-600 mb-2">@${profile.username}</p>
+                                <p class="text-gray-400">This account is no longer active.</p>
                             </div>
                         `;
-                        document.getElementById('share-profile-btn').addEventListener('click', () => {
-                            const profileLink = `${window.location.origin}/profiles/@${profile.username}`;
-                            navigator.clipboard.writeText(profileLink).then(() => {
-                                showModal("Copied!", "Profile link copied to clipboard.");
-                            }).catch(err => {
-                                console.error('Could not copy text: ', err);
-                                showModal("Error", "Could not copy link to clipboard.");
-                            });
-                        });
-                        break; // Stop loop once profile is found
+                        return;
                     }
-                }
-                if (!profileFound) {
-                    mainContent.innerHTML = `<div class="p-6 text-center text-red-500">User @${username} not found.</div>`;
+
+                    mainContent.innerHTML = `
+                        <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                            <img src="${profile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
+                            <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
+                            <p class="text-gray-600 mb-2">@${profile?.username}</p>
+                            <p class="text-gray-600 mb-2">${profile?.bio}</p>
+                            <div class="flex justify-center space-x-2 mt-4">
+                                ${profileUserId === userId ? `
+                                    <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                                ` : ''}
+                                <button id="share-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
+                            </div>
+                        </div>
+                    `;
+                    document.getElementById('share-profile-btn').addEventListener('click', () => {
+                        const profileLink = `${window.location.origin}/profiles/@${profile.username}`;
+                        navigator.clipboard.writeText(profileLink).then(() => {
+                            showModal("Copied!", "Profile link copied to clipboard.");
+                        }).catch(err => {
+                            console.error('Could not copy text: ', err);
+                            showModal("Error", "Could not copy link to clipboard.");
+                        });
+                    });
+                } else {
+                    mainContent.innerHTML = `<div class="p-6 text-center text-red-500">Profile data not found for this user.</div>`;
                 }
             }).catch(error => {
-                console.error("Error fetching user profiles:", error);
+                console.error("Error fetching user profile:", error);
                 mainContent.innerHTML = `<div class="p-6 text-center text-red-500">Error loading profile.</div>`;
             });
         }
@@ -755,31 +753,35 @@
                 }
             });
 
-            const sessionsContainer = document.getElementById('sessions-container');
             const sessionsColRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions');
+            const sessionsContainer = document.getElementById('sessions-container');
 
-            onSnapshot(sessionsColRef, (snapshot) => {
+            onSnapshot(sessionsColRef, async (snapshot) => {
                 sessionsContainer.innerHTML = '';
                 if (snapshot.empty) {
                     sessionsContainer.innerHTML = `<p class="text-center text-gray-500 mt-8">No message sessions yet.</p>`;
                 }
-                snapshot.docs.forEach(doc => {
+                for (const doc of snapshot.docs) {
                     const session = doc.data();
                     const otherUserId = session.members.find(id => id !== userId);
-                    if (!otherUserId) return;
-                    
+                    if (!otherUserId) continue;
+
+                    const otherUserProfileRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'profile', 'data');
+                    const otherUserProfileSnap = await getDoc(otherUserProfileRef);
+                    const otherUserProfile = otherUserProfileSnap.exists() ? otherUserProfileSnap.data() : { displayName: 'Unknown User', photoURL: 'https://placehold.co/40x40/A0AEC0/ffffff?text=U' };
+
                     const sessionElement = document.createElement('div');
                     sessionElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm cursor-pointer hover:bg-gray-50 transition-colors";
                     sessionElement.innerHTML = `
-                        <img src="${JSON.parse(session.members_json).find(m => m.id === otherUserId)?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="User" class="w-12 h-12 rounded-full">
+                        <img src="${otherUserProfile.photoURL}" alt="User" class="w-12 h-12 rounded-full">
                         <div>
-                            <p class="font-semibold text-gray-800">${JSON.parse(session.members_json).find(m => m.id === otherUserId)?.displayName || 'Unknown User'}</p>
+                            <p class="font-semibold text-gray-800">${otherUserProfile.displayName}</p>
                             <p class="text-sm text-gray-500 truncate w-48">${session.lastMessage || 'Start a conversation'}</p>
                         </div>
                     `;
                     sessionElement.addEventListener('click', () => showView('message_session', doc.id));
                     sessionsContainer.appendChild(sessionElement);
-                });
+                }
             });
         }
         
