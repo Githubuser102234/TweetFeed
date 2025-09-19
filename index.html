@@ -914,7 +914,7 @@
             input.value = '';
         }
 
-        function renderSharePage(postId) {
+        async function renderSharePage(postId) {
             mainContent.innerHTML = `
                 <div class="p-6 bg-white rounded-xl shadow-xl text-center">
                     <h2 class="text-2xl font-bold mb-4">Share This Post</h2>
@@ -939,25 +939,26 @@
             
             const postToShareContainer = document.getElementById('post-to-share');
             
-            // Fix: Add a check for an invalid postId right at the start.
+            // Check for a valid postId first
             if (!postId) {
                 postToShareContainer.innerHTML = `<p class="text-red-500">Invalid post link. Please go back and try again.</p>`;
                 return;
             }
 
-            const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
-            
-            onSnapshot(postDocRef, async (doc) => {
-                if (!doc.exists()) {
+            // Now, fetch both the post and the author's profile
+            try {
+                const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+                const postSnap = await getDoc(postDocRef);
+
+                if (!postSnap.exists()) {
                     postToShareContainer.innerHTML = `<p class="text-red-500">Post not found.</p>`;
                     return;
                 }
-                const post = doc.data();
+
+                const post = postSnap.data();
                 const authorProfileRef = doc(db, 'artifacts', appId, 'users', post.userId, 'profile', 'data');
                 const authorProfileSnap = await getDoc(authorProfileRef);
-                
-                // FIX: Changed from `{ isBanned: true }` to `{ isBanned: false }` to fix the bug where posts were hidden.
-                // A non-existent profile does not mean the user is banned.
+
                 const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: false };
 
                 if (authorProfile.isBanned) {
@@ -978,7 +979,10 @@
                     </div>
                     <p class="text-gray-700 leading-relaxed">${post.content}</p>
                 `;
-            });
+            } catch (error) {
+                console.error("Error fetching post data:", error);
+                postToShareContainer.innerHTML = `<p class="text-red-500">An error occurred while loading the post.</p>`;
+            }
         }
 
         // --- Event Listeners ---
