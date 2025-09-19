@@ -938,6 +938,13 @@
             });
             
             const postToShareContainer = document.getElementById('post-to-share');
+            
+            // Fix: Add a check for an invalid postId right at the start.
+            if (!postId) {
+                postToShareContainer.innerHTML = `<p class="text-red-500">Invalid post link. Please go back and try again.</p>`;
+                return;
+            }
+
             const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
             
             onSnapshot(postDocRef, async (doc) => {
