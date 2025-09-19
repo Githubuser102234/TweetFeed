@@ -177,9 +177,8 @@
                     loadingSpinner.style.display = 'none';
                     if (user) {
                         userId = user.uid;
-                        await ensureUserProfileExists(user);
+                        await checkAndSetUserProfile(user);
                         renderAuthStatus(user);
-                        handleUrlChange();
                     } else {
                         userId = null;
                         userProfile = null;
@@ -194,23 +193,28 @@
             }
         }
         
-        // Ensure a profile document exists for the user
-        async function ensureUserProfileExists(user) {
+        // Checks for profile and handles routing
+        async function checkAndSetUserProfile(user) {
             const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
             const userDocSnap = await getDoc(userDocRef);
 
             if (!userDocSnap.exists()) {
-                // User is new, redirect to profile creation page
                 if (window.location.pathname !== '/createprofile') {
                     window.history.pushState({}, '', '/createprofile');
                     handleUrlChange();
                 }
             } else {
                 userProfile = userDocSnap.data();
-                // If user is on create profile page but already has a profile, redirect to feed
+                if (userProfile.isBanned) {
+                    await signOut(auth);
+                    await showModal("Account Banned", "Your account has been banned. You cannot sign in.");
+                    return;
+                }
                 if (window.location.pathname === '/createprofile') {
                      window.history.pushState({}, '', '/');
                      handleUrlChange();
+                } else {
+                    handleUrlChange();
                 }
             }
         }
@@ -272,8 +276,6 @@
             }
             
             bottomNav.classList.remove('hidden');
-
-            // Hide all nav buttons' active state
             navButtons.forEach(btn => btn.classList.replace('text-blue-500', 'text-gray-500'));
             
             if (path === '/createprofile') {
@@ -352,9 +354,8 @@
                 return;
             }
 
-            // Check if username is already taken
             const usersColRef = collection(db, 'artifacts', appId, 'users');
-            const q = query(usersColRef, where('username', '==', username));
+            const q = query(usersColRef, where('profile.data.username', '==', username));
             const querySnapshot = await getDocs(q);
             if (!querySnapshot.empty) {
                 await showModal("Error", "Username already taken. Please choose another.");
@@ -368,7 +369,8 @@
                 bio: bio,
                 photoURL: auth.currentUser.photoURL,
                 email: auth.currentUser.email,
-                createdAt: serverTimestamp()
+                createdAt: serverTimestamp(),
+                isBanned: false
             };
             await setDoc(userDocRef, newProfile);
             userProfile = newProfile;
@@ -436,15 +438,22 @@
             const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
             const q = query(postsColRef);
 
-            onSnapshot(q, (snapshot) => {
+            onSnapshot(q, async (snapshot) => {
                 postsContainer.innerHTML = '';
                 if (snapshot.empty) {
                     postsContainer.innerHTML = `<p class="text-center text-gray-500 mt-8">No posts yet. Be the first to post!</p>`;
                 } else {
                     const sortedDocs = snapshot.docs.sort((a, b) => b.data().createdAt?.toMillis() - a.data().createdAt?.toMillis());
-                    sortedDocs.forEach(async (doc) => {
+                    for (const doc of sortedDocs) {
                         const post = doc.data();
                         const postId = doc.id;
+                        
+                        const authorProfileRef = doc(db, 'artifacts', appId, 'users', post.userId, 'profile', 'data');
+                        const authorProfileSnap = await getDoc(authorProfileRef);
+                        const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: true };
+
+                        if (authorProfile.isBanned) continue;
+
                         const postElement = document.createElement('div');
                         postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
                         
@@ -453,7 +462,6 @@
                         const likesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes');
                         const dislikesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes');
                         
-                        // Real-time listener for likes and dislikes
                         onSnapshot(likesColRef, (likesSnap) => {
                             const likesCount = likesSnap.docs.length;
                             const isLiked = likesSnap.docs.some(d => d.id === userId);
@@ -474,7 +482,7 @@
                         
                         postElement.innerHTML = `
                             <div class="flex items-start justify-between">
-                                <div class="flex items-center space-x-3 mb-2">
+                                <div class="flex items-center space-x-3 mb-2 cursor-pointer" onclick="showView('user_profile', '${post.username}')">
                                     <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
                                     <div>
                                         <p class="font-semibold text-gray-800">${post.displayName || post.name}</p>
@@ -507,16 +515,47 @@
                         
                         postsContainer.appendChild(postElement);
                         
-                        // Add event listeners
                         if (post.userId === userId) {
                             postElement.querySelector('.delete-btn')?.addEventListener('click', () => deletePost(postId));
                         }
-                        postElement.querySelector('.like-btn')?.addEventListener('click', () => likePost(postId));
-                        postElement.querySelector('.dislike-btn')?.addEventListener('click', () => dislikePost(postId));
+                        postElement.querySelector('.like-btn')?.addEventListener('click', () => toggleLike(postId));
+                        postElement.querySelector('.dislike-btn')?.addEventListener('click', () => toggleDislike(postId));
                         postElement.querySelector('.share-btn')?.addEventListener('click', () => showView('share', postId));
-                    });
+                    }
                 }
             });
+        }
+        
+        async function toggleLike(postId) {
+            const likeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes', userId);
+            const dislikeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes', userId);
+            const likeSnap = await getDoc(likeDocRef);
+
+            if (likeSnap.exists()) {
+                await deleteDoc(likeDocRef);
+            } else {
+                await setDoc(likeDocRef, { timestamp: serverTimestamp() });
+                const dislikeSnap = await getDoc(dislikeDocRef);
+                if (dislikeSnap.exists()) {
+                    await deleteDoc(dislikeDocRef);
+                }
+            }
+        }
+        
+        async function toggleDislike(postId) {
+            const dislikeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes', userId);
+            const likeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes', userId);
+            const dislikeSnap = await getDoc(dislikeDocRef);
+
+            if (dislikeSnap.exists()) {
+                await deleteDoc(dislikeDocRef);
+            } else {
+                await setDoc(dislikeDocRef, { timestamp: serverTimestamp() });
+                const likeSnap = await getDoc(likeDocRef);
+                if (likeSnap.exists()) {
+                    await deleteDoc(likeDocRef);
+                }
+            }
         }
 
         async function deletePost(postId) {
@@ -528,17 +567,6 @@
             }
         }
         
-        async function likePost(postId) {
-            const likeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes', userId);
-            await setDoc(likeDocRef, { timestamp: serverTimestamp() });
-        }
-        
-        async function dislikePost(postId) {
-            const dislikeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes', userId);
-            await setDoc(dislikeDocRef, { timestamp: serverTimestamp() });
-        }
-
-        // Post a new tweet
         async function postTweet() {
             const content = document.getElementById('new-post-content').value.trim();
             if (!content) {
@@ -558,11 +586,10 @@
             document.getElementById('new-post-content').value = '';
         }
         
-        // Render a single user's profile page
         function renderUserProfilePage(username) {
             mainContent.innerHTML = `<div class="p-6 text-center text-gray-500">Loading profile...</div>`;
             const usersColRef = collection(db, 'artifacts', appId, 'users');
-            const q = query(usersColRef, where('username', '==', username));
+            const q = query(usersColRef, where('profile.data.username', '==', username));
 
             onSnapshot(q, (snapshot) => {
                 if (snapshot.empty) {
@@ -570,8 +597,20 @@
                     return;
                 }
                 const userDoc = snapshot.docs[0];
-                const profile = userDoc.data();
+                const profile = userDoc.data().profile.data;
                 const profileUserId = userDoc.id;
+
+                if (profile.isBanned) {
+                    mainContent.innerHTML = `
+                        <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                            <i class="fa-solid fa-ban text-6xl text-red-500 mb-4"></i>
+                            <h2 class="text-xl font-bold text-gray-800">Account Banned</h2>
+                            <p class="text-gray-600 mb-2">@${profile.username}</p>
+                            <p class="text-gray-400">This account is no longer active.</p>
+                        </div>
+                    `;
+                    return;
+                }
 
                 mainContent.innerHTML = `
                     <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
@@ -579,11 +618,23 @@
                         <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
                         <p class="text-gray-600 mb-2">@${profile?.username}</p>
                         <p class="text-gray-600 mb-2">${profile?.bio}</p>
-                        ${profileUserId === userId ? `
-                            <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
-                        ` : ''}
+                        <div class="flex justify-center space-x-2 mt-4">
+                            ${profileUserId === userId ? `
+                                <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                            ` : ''}
+                            <button id="share-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
+                        </div>
                     </div>
                 `;
+                document.getElementById('share-profile-btn').addEventListener('click', () => {
+                    const profileLink = `${window.location.origin}/profiles/@${profile.username}`;
+                    navigator.clipboard.writeText(profileLink).then(() => {
+                        showModal("Copied!", "Profile link copied to clipboard.");
+                    }).catch(err => {
+                        console.error('Could not copy text: ', err);
+                        showModal("Error", "Could not copy link to clipboard.");
+                    });
+                });
             });
         }
 
@@ -596,7 +647,10 @@
                     <h2 class="text-xl font-bold text-gray-800">${userProfile?.displayName}</h2>
                     <p class="text-gray-600 mb-2">@${userProfile?.username}</p>
                     <p class="text-gray-600 mb-2">${userProfile?.bio}</p>
-                    <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                    <div class="flex justify-center space-x-2 mt-4">
+                        <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                        <button id="share-my-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
+                    </div>
                 </div>
 
                 <!-- All Users List -->
@@ -605,14 +659,23 @@
                     <p class="text-center text-gray-500">Loading users...</p>
                 </div>
             `;
+            
+            document.getElementById('share-my-profile-btn').addEventListener('click', () => {
+                const profileLink = `${window.location.origin}/profiles/@${userProfile.username}`;
+                navigator.clipboard.writeText(profileLink).then(() => {
+                    showModal("Copied!", "Profile link copied to clipboard.");
+                }).catch(err => {
+                    console.error('Could not copy text: ', err);
+                    showModal("Error", "Could not copy link to clipboard.");
+                });
+            });
 
             const usersContainer = document.getElementById('users-container');
             const usersColRef = collection(db, 'artifacts', appId, 'users');
             
-            // onSnapshot listener for a more efficient and real-time user list
-            onSnapshot(usersColRef, (snapshot) => {
+            onSnapshot(usersColRef, async (snapshot) => {
                 usersContainer.innerHTML = '';
-                snapshot.docs.forEach(async (userDoc) => {
+                for (const userDoc of snapshot.docs) {
                     const profileData = userDoc.data().profile.data;
                     const otherUserId = userDoc.id;
                     if (otherUserId !== userId) {
@@ -627,9 +690,10 @@
                             <button data-id="${otherUserId}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
                         `;
                         userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId));
+                        userElement.addEventListener('click', () => showView('user_profile', profileData.username));
                         usersContainer.appendChild(userElement);
                     }
-                });
+                }
             });
         }
 
@@ -697,9 +761,14 @@
                     await showModal("Error", "User not found. Please check the User ID.");
                     return;
                 }
+                const otherUserProfile = otherUserSnap.data();
+                if (otherUserProfile.isBanned) {
+                    await showModal("Error", "Cannot message a banned user.");
+                    return;
+                }
 
                 const userDetails = { id: userId, displayName: userSnap.data().displayName, photoURL: userSnap.data().photoURL };
-                const otherUserDetails = { id: otherUserId, displayName: otherUserSnap.data().displayName, photoURL: otherUserSnap.data().photoURL };
+                const otherUserDetails = { id: otherUserId, displayName: otherUserProfile.displayName, photoURL: otherUserProfile.photoURL };
                 
                 const sessionData = {
                     members: [userId, otherUserId],
@@ -816,12 +885,22 @@
             const postToShareContainer = document.getElementById('post-to-share');
             const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
             
-            onSnapshot(postDocRef, (doc) => {
+            onSnapshot(postDocRef, async (doc) => {
                 if (!doc.exists()) {
                     postToShareContainer.innerHTML = `<p class="text-red-500">Post not found.</p>`;
                     return;
                 }
                 const post = doc.data();
+
+                const authorProfileRef = doc(db, 'artifacts', appId, 'users', post.userId, 'profile', 'data');
+                const authorProfileSnap = await getDoc(authorProfileRef);
+                const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: true };
+
+                if (authorProfile.isBanned) {
+                    postToShareContainer.innerHTML = `<p class="text-red-500">This post is from a banned user and cannot be shared.</p>`;
+                    return;
+                }
+
                 const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
 
                 postToShareContainer.innerHTML = `
