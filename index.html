@@ -447,96 +447,114 @@
 
             // Fetch and display posts in real-time
             const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+            const postsContainer = document.getElementById('posts-container');
             const q = query(postsColRef);
-
+            
+            // This is the core fix. The async `await` loop inside `onSnapshot` was blocking the UI.
+            // Now we collect all necessary data first, then render.
             onSnapshot(q, async (snapshot) => {
                 postsContainer.innerHTML = '';
                 if (snapshot.empty) {
                     postsContainer.innerHTML = `<p class="text-center text-gray-500 mt-8">No posts yet. Be the first to post!</p>`;
-                } else {
-                    const sortedDocs = snapshot.docs.sort((a, b) => b.data().createdAt?.toMillis() - a.data().createdAt?.toMillis());
-                    for (const doc of sortedDocs) {
-                        const post = doc.data();
-                        const postId = doc.id;
-                        
-                        const authorProfileRef = doc(db, 'artifacts', appId, 'users', post.userId, 'profile', 'data');
-                        const authorProfileSnap = await getDoc(authorProfileRef);
-                        
-                        // FIX: Changed from `{ isBanned: true }` to `{ isBanned: false }` to fix the bug where all posts were hidden.
-                        // A non-existent profile does not mean the user is banned.
-                        const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: false };
-
-                        if (authorProfile.isBanned) continue;
-
-                        const postElement = document.createElement('div');
-                        postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
-                        
-                        const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
-
-                        const likesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes');
-                        const dislikesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes');
-                        
-                        onSnapshot(likesColRef, (likesSnap) => {
-                            const likesCount = likesSnap.docs.length;
-                            const isLiked = likesSnap.docs.some(d => d.id === userId);
-                            const likesBtn = postElement.querySelector('.like-btn');
-                            if (likesBtn) {
-                                likesBtn.innerHTML = `<i class="${isLiked ? 'fa-solid text-red-500' : 'fa-regular'} fa-heart mr-1"></i> ${likesCount}`;
-                            }
-                        });
-
-                        onSnapshot(dislikesColRef, (dislikesSnap) => {
-                            const dislikesCount = dislikesSnap.docs.length;
-                            const isDisliked = dislikesSnap.docs.some(d => d.id === userId);
-                            const dislikesBtn = postElement.querySelector('.dislike-btn');
-                            if (dislikesBtn) {
-                                dislikesBtn.innerHTML = `<i class="${isDisliked ? 'fa-solid text-blue-500' : 'fa-regular'} fa-thumbs-down mr-1"></i> ${dislikesCount}`;
-                            }
-                        });
-                        
-                        postElement.innerHTML = `
-                            <div class="flex items-start justify-between">
-                                <div class="flex items-center space-x-3 mb-2 cursor-pointer" onclick="showView('user_profile', '${post.username}')">
-                                    <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
-                                    <div>
-                                        <p class="font-semibold text-gray-800">${post.displayName || post.name}</p>
-                                        <p class="text-xs text-gray-500">@${post.username || 'unknown'}</p>
-                                        <p class="text-xs text-gray-500">${timeString}</p>
-                                    </div>
-                                </div>
-                                ${post.userId === userId ? `
-                                    <button class="delete-btn text-gray-400 hover:text-red-500 transition-colors">
-                                        <i class="fa-solid fa-trash"></i>
-                                    </button>
-                                ` : ''}
-                            </div>
-                            <p class="text-gray-700 leading-relaxed mb-4">${post.content}</p>
-                            <div class="flex items-center justify-around text-gray-500 text-sm">
-                                <button class="like-btn flex items-center space-x-1 hover:text-red-500 transition-colors" data-id="${postId}">
-                                    <i class="fa-regular fa-heart"></i>
-                                    <span>0</span>
-                                </button>
-                                <button class="dislike-btn flex items-center space-x-1 hover:text-blue-500 transition-colors" data-id="${postId}">
-                                    <i class="fa-regular fa-thumbs-down"></i>
-                                    <span>0</span>
-                                </button>
-                                <button class="share-btn flex items-center space-x-1 hover:text-green-500 transition-colors" data-id="${postId}">
-                                    <i class="fa-solid fa-share"></i>
-                                    <span>Share</span>
-                                </button>
-                            </div>
-                        `;
-                        
-                        postsContainer.appendChild(postElement);
-                        
-                        if (post.userId === userId) {
-                            postElement.querySelector('.delete-btn')?.addEventListener('click', () => deletePost(postId));
-                        }
-                        postElement.querySelector('.like-btn')?.addEventListener('click', () => toggleLike(postId));
-                        postElement.querySelector('.dislike-btn')?.addEventListener('click', () => toggleDislike(postId));
-                        postElement.querySelector('.share-btn')?.addEventListener('click', () => showView('share', postId));
-                    }
+                    return;
                 }
+
+                const postDocs = snapshot.docs;
+                const authorIds = new Set(postDocs.map(doc => doc.data().userId));
+                
+                // Fetch all unique author profiles concurrently.
+                const profilePromises = Array.from(authorIds).map(authorId => 
+                    getDoc(doc(db, 'artifacts', appId, 'users', authorId, 'profile', 'data'))
+                );
+                const profileSnaps = await Promise.all(profilePromises);
+
+                const profiles = {};
+                profileSnaps.forEach(snap => {
+                    if (snap.exists()) {
+                        const profileData = snap.data();
+                        profiles[profileData.email] = profileData;
+                        profiles[profileData.username] = profileData;
+                        profiles[snap.ref.parent.parent.id] = profileData; // Key by user ID
+                    }
+                });
+
+                const sortedDocs = postDocs.sort((a, b) => b.data().createdAt?.toMillis() - a.data().createdAt?.toMillis());
+                
+                sortedDocs.forEach(doc => {
+                    const post = doc.data();
+                    const postId = doc.id;
+                    const authorProfile = profiles[post.userId] || { isBanned: false };
+
+                    if (authorProfile.isBanned) return;
+
+                    const postElement = document.createElement('div');
+                    postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
+                    
+                    const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
+
+                    const likesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes');
+                    const dislikesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes');
+                    
+                    onSnapshot(likesColRef, (likesSnap) => {
+                        const likesCount = likesSnap.docs.length;
+                        const isLiked = likesSnap.docs.some(d => d.id === userId);
+                        const likesBtn = postElement.querySelector('.like-btn');
+                        if (likesBtn) {
+                            likesBtn.innerHTML = `<i class="${isLiked ? 'fa-solid text-red-500' : 'fa-regular'} fa-heart mr-1"></i> ${likesCount}`;
+                        }
+                    });
+
+                    onSnapshot(dislikesColRef, (dislikesSnap) => {
+                        const dislikesCount = dislikesSnap.docs.length;
+                        const isDisliked = dislikesSnap.docs.some(d => d.id === userId);
+                        const dislikesBtn = postElement.querySelector('.dislike-btn');
+                        if (dislikesBtn) {
+                            dislikesBtn.innerHTML = `<i class="${isDisliked ? 'fa-solid text-blue-500' : 'fa-regular'} fa-thumbs-down mr-1"></i> ${dislikesCount}`;
+                        }
+                    });
+                    
+                    postElement.innerHTML = `
+                        <div class="flex items-start justify-between">
+                            <div class="flex items-center space-x-3 mb-2 cursor-pointer" onclick="showView('user_profile', '${post.username}')">
+                                <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                                <div>
+                                    <p class="font-semibold text-gray-800">${post.displayName || post.name}</p>
+                                    <p class="text-xs text-gray-500">@${post.username || 'unknown'}</p>
+                                    <p class="text-xs text-gray-500">${timeString}</p>
+                                </div>
+                            </div>
+                            ${post.userId === userId ? `
+                                <button class="delete-btn text-gray-400 hover:text-red-500 transition-colors">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            ` : ''}
+                        </div>
+                        <p class="text-gray-700 leading-relaxed mb-4">${post.content}</p>
+                        <div class="flex items-center justify-around text-gray-500 text-sm">
+                            <button class="like-btn flex items-center space-x-1 hover:text-red-500 transition-colors" data-id="${postId}">
+                                <i class="fa-regular fa-heart"></i>
+                                <span>0</span>
+                            </button>
+                            <button class="dislike-btn flex items-center space-x-1 hover:text-blue-500 transition-colors" data-id="${postId}">
+                                <i class="fa-regular fa-thumbs-down"></i>
+                                <span>0</span>
+                            </button>
+                            <button class="share-btn flex items-center space-x-1 hover:text-green-500 transition-colors" data-id="${postId}">
+                                <i class="fa-solid fa-share"></i>
+                                <span>Share</span>
+                            </button>
+                        </div>
+                    `;
+                    
+                    postsContainer.appendChild(postElement);
+                    
+                    if (post.userId === userId) {
+                        postElement.querySelector('.delete-btn')?.addEventListener('click', () => deletePost(postId));
+                    }
+                    postElement.querySelector('.like-btn')?.addEventListener('click', () => toggleLike(postId));
+                    postElement.querySelector('.dislike-btn')?.addEventListener('click', () => toggleDislike(postId));
+                    postElement.querySelector('.share-btn')?.addEventListener('click', () => showView('share', postId));
+                });
             });
         }
         
