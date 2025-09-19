@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TweetFeed</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7fafc;
+        }
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.4);
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Main App Container -->
+    <div id="app-container" class="bg-white rounded-3xl shadow-xl w-full max-w-md h-[90vh] flex flex-col overflow-hidden">
+        
+        <!-- Header -->
+        <header class="bg-white p-4 border-b border-gray-200 flex items-center justify-between z-10">
+            <h1 class="text-2xl font-bold text-gray-800">TweetFeed</h1>
+            <div id="auth-status-container" class="flex items-center space-x-2">
+                <!-- Auth status and profile image will be rendered here -->
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main id="main-content" class="flex-1 overflow-y-auto p-4 bg-gray-50 pb-20">
+            <!-- Content will be dynamically loaded here based on navigation -->
+            <div id="loading-spinner" class="flex justify-center items-center h-full">
+                <i class="fa-solid fa-spinner fa-spin-pulse text-4xl text-blue-500"></i>
+            </div>
+        </main>
+
+        <!-- Bottom Navigation Bar -->
+        <nav id="bottom-nav" class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-200 grid grid-cols-3 z-20">
+            <button id="nav-feed" class="flex flex-col items-center justify-center py-2 px-4 text-blue-500 hover:bg-gray-100 transition-colors">
+                <i class="fa-solid fa-home text-2xl"></i>
+                <span class="text-xs mt-1">Feed</span>
+            </button>
+            <button id="nav-profiles" class="flex flex-col items-center justify-center py-2 px-4 text-gray-500 hover:bg-gray-100 transition-colors">
+                <i class="fa-solid fa-user-group text-2xl"></i>
+                <span class="text-xs mt-1">Profiles</span>
+            </button>
+            <button id="nav-messages" class="flex flex-col items-center justify-center py-2 px-4 text-gray-500 hover:bg-gray-100 transition-colors">
+                <i class="fa-solid fa-comment-dots text-2xl"></i>
+                <span class="text-xs mt-1">Messages</span>
+            </button>
+        </nav>
+
+        <!-- Custom Modal for Alerts/Confirmations -->
+        <div id="custom-modal" class="modal">
+            <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm text-center">
+                <h3 id="modal-title" class="text-xl font-semibold mb-2 text-gray-800"></h3>
+                <p id="modal-message" class="text-gray-600 mb-4"></p>
+                <div class="flex justify-center space-x-4">
+                    <button id="modal-ok-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors">OK</button>
+                    <button id="modal-cancel-btn" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400 transition-colors">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Firebase SDKs & App Logic -->
+    <script type="module">
+        // Global variables provided by the Canvas environment.
+        // These are used for Firebase configuration and authentication.
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyAWi42vGIbO7e5GC3AVwoYPhr57k-I-sLk",
+            authDomain: "tweetfeed-226dd.firebaseapp.com",
+            projectId: "tweetfeed-226dd",
+            storageBucket: "tweetfeed-226dd.firebasestorage.app",
+            messagingSenderId: "488247621544",
+            appId: "1:488247621544:web:ecb8ea89cad9adf5df8f9d",
+            measurementId: "G-2ZMGDMJH7M"
+        };
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Firebase Imports from v11.6.1 CDN
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            GoogleAuthProvider, 
+            signInWithPopup, 
+            signInWithCustomToken, 
+            onAuthStateChanged, 
+            signOut,
+            signInAnonymously 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            getDoc, 
+            setDoc, 
+            addDoc, 
+            collection, 
+            query, 
+            where, 
+            onSnapshot, 
+            serverTimestamp,
+            getDocs,
+            deleteDoc,
+            updateDoc
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        let db;
+        let auth;
+        let userId;
+        let userProfile;
+
+        // UI elements
+        const mainContent = document.getElementById('main-content');
+        const bottomNav = document.getElementById('bottom-nav');
+        const navButtons = bottomNav.querySelectorAll('button');
+        const authContainer = document.getElementById('auth-status-container');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        // Modal elements
+        const modal = document.getElementById('custom-modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalMessage = document.getElementById('modal-message');
+        const modalOkBtn = document.getElementById('modal-ok-btn');
+        const modalCancelBtn = document.getElementById('modal-cancel-btn');
+        let modalResolve;
+
+        // Global state for current view
+        let currentView = 'feed';
+        let dmSessionId = null;
+
+        // Show a custom modal instead of alert()
+        function showModal(title, message, isConfirmation = false) {
+            return new Promise((resolve) => {
+                modalTitle.textContent = title;
+                modalMessage.textContent = message;
+                modalCancelBtn.style.display = isConfirmation ? 'inline-block' : 'none';
+                modal.style.display = 'flex';
+
+                modalOkBtn.onclick = () => {
+                    modal.style.display = 'none';
+                    resolve(true);
+                };
+                modalCancelBtn.onclick = () => {
+                    modal.style.display = 'none';
+                    resolve(false);
+                };
+            });
+        }
+
+        // --- Firebase Initialization and Authentication ---
+
+        // Initialize Firebase and set up auth state listener
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // Sign in with custom token or anonymously
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Listen for auth state changes
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        await ensureUserProfileExists(user);
+                        renderAuthStatus(user);
+                        renderApp();
+                    } else {
+                        userId = null;
+                        userProfile = null;
+                        renderAuthStatus(null);
+                        renderApp();
+                    }
+                    loadingSpinner.style.display = 'none';
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                loadingSpinner.style.display = 'none';
+                showModal("Initialization Error", "Failed to connect to the backend. Please check the console for details.");
+            }
+        }
+
+        // Ensure a profile document exists for the user
+        async function ensureUserProfileExists(user) {
+            const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+            const userDocSnap = await getDoc(userDocRef);
+
+            if (!userDocSnap.exists()) {
+                const newProfile = {
+                    name: user.displayName || 'Anonymous User',
+                    photoURL: user.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U',
+                    bio: 'Hello, I am a new user on TweetFeed!',
+                    email: user.email || '',
+                    createdAt: serverTimestamp()
+                };
+                await setDoc(userDocRef, newProfile);
+                userProfile = newProfile;
+            } else {
+                userProfile = userDocSnap.data();
+            }
+        }
+
+        // Renders the auth status container (sign-in/sign-out buttons)
+        function renderAuthStatus(user) {
+            authContainer.innerHTML = '';
+            if (user) {
+                const userDiv = document.createElement('div');
+                userDiv.className = "flex items-center space-x-2";
+                userDiv.innerHTML = `
+                    <span class="text-sm font-medium text-gray-600 hidden sm:inline">${user.displayName || 'You'}</span>
+                    <img src="${user.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full cursor-pointer hover:ring-2 ring-blue-500 transition-all" onclick="showView('profiles')">
+                    <button id="sign-out-btn" class="text-gray-500 hover:text-red-500 transition-colors hidden sm:inline">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                    </button>
+                `;
+                authContainer.appendChild(userDiv);
+                document.getElementById('sign-out-btn').addEventListener('click', () => {
+                    signOut(auth);
+                });
+            } else {
+                const signInBtn = document.createElement('button');
+                signInBtn.id = 'sign-in-btn';
+                signInBtn.className = 'bg-blue-500 text-white px-4 py-2 rounded-full font-semibold shadow-md hover:bg-blue-600 transition-colors';
+                signInBtn.innerHTML = `<i class="fa-brands fa-google mr-2"></i>Sign In with Google`;
+                signInBtn.addEventListener('click', async () => {
+                    try {
+                        const provider = new GoogleAuthProvider();
+                        await signInWithPopup(auth, provider);
+                    } catch (error) {
+                        console.error("Error during Google sign-in:", error);
+                        showModal("Sign-in Failed", "Could not sign in with Google. Please try again.");
+                    }
+                });
+                authContainer.appendChild(signInBtn);
+            }
+        }
+
+        // Main app rendering logic
+        function renderApp() {
+            if (!userId) {
+                mainContent.innerHTML = `
+                    <div class="flex flex-col items-center justify-center p-8 text-center h-full">
+                        <img src="https://placehold.co/150x150/d1d5db/374151?text=Login" alt="Login Illustration" class="mb-6 rounded-full">
+                        <h2 class="text-2xl font-bold mb-2">Welcome to TweetFeed</h2>
+                        <p class="text-gray-600 mb-6">Sign in to view the feed, manage your profile, and send messages.</p>
+                        <div id="auth-buttons" class="w-full"></div>
+                    </div>
+                `;
+                document.getElementById('auth-buttons').appendChild(document.getElementById('sign-in-btn').cloneNode(true));
+                document.getElementById('sign-in-btn').remove();
+                bottomNav.classList.add('hidden');
+                return;
+            }
+
+            bottomNav.classList.remove('hidden');
+            // Hide all nav buttons' active state
+            navButtons.forEach(btn => btn.classList.replace('text-blue-500', 'text-gray-500'));
+            
+            // Show the current view
+            switch (currentView) {
+                case 'feed':
+                    document.getElementById('nav-feed').classList.replace('text-gray-500', 'text-blue-500');
+                    renderFeed();
+                    break;
+                case 'profiles':
+                    document.getElementById('nav-profiles').classList.replace('text-gray-500', 'text-blue-500');
+                    renderProfiles();
+                    break;
+                case 'messages':
+                    document.getElementById('nav-messages').classList.replace('text-gray-500', 'text-blue-500');
+                    renderMessages();
+                    break;
+            }
+        }
+
+        // --- View Rendering Functions ---
+
+        window.showView = (viewName, data = null) => {
+            currentView = viewName;
+            if (viewName === 'message_session') {
+                dmSessionId = data;
+                renderMessageSession();
+            } else {
+                dmSessionId = null;
+                renderApp();
+            }
+        };
+
+        // Render the main feed
+        function renderFeed() {
+            mainContent.innerHTML = `
+                <!-- New Post Form -->
+                <div class="bg-white p-4 rounded-xl shadow-md mb-4">
+                    <div class="flex items-start space-x-3 mb-2">
+                        <img src="${userProfile?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                        <textarea id="new-post-content" class="w-full h-24 p-2 text-gray-700 bg-gray-50 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="What's happening?"></textarea>
+                    </div>
+                    <button id="post-btn" class="w-full bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600 transition-colors">Post</button>
+                </div>
+
+                <!-- Feed Posts -->
+                <div id="posts-container">
+                    <p class="text-center text-gray-500 mt-8">Loading posts...</p>
+                </div>
+            `;
+
+            document.getElementById('post-btn').addEventListener('click', postTweet);
+
+            // Fetch and display posts in real-time
+            const postsContainer = document.getElementById('posts-container');
+            const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+            const q = query(postsColRef);
+
+            onSnapshot(q, (snapshot) => {
+                postsContainer.innerHTML = '';
+                if (snapshot.empty) {
+                    postsContainer.innerHTML = `<p class="text-center text-gray-500 mt-8">No posts yet. Be the first to post!</p>`;
+                } else {
+                    const sortedDocs = snapshot.docs.sort((a, b) => b.data().createdAt?.toMillis() - a.data().createdAt?.toMillis());
+                    sortedDocs.forEach(doc => {
+                        const post = doc.data();
+                        const postElement = document.createElement('div');
+                        postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
+                        
+                        const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
+
+                        postElement.innerHTML = `
+                            <div class="flex items-center space-x-3 mb-2">
+                                <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                                <div>
+                                    <p class="font-semibold text-gray-800">${post.name}</p>
+                                    <p class="text-xs text-gray-500">${timeString}</p>
+                                </div>
+                            </div>
+                            <p class="text-gray-700 leading-relaxed">${post.content}</p>
+                        `;
+                        postsContainer.appendChild(postElement);
+                    });
+                }
+            });
+        }
+
+        // Post a new tweet
+        async function postTweet() {
+            const content = document.getElementById('new-post-content').value.trim();
+            if (!content) {
+                showModal("Error", "Post content cannot be empty.");
+                return;
+            }
+
+            const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+            await addDoc(postsColRef, {
+                content: content,
+                name: userProfile.name,
+                photoURL: userProfile.photoURL,
+                userId: userId,
+                createdAt: serverTimestamp()
+            });
+            document.getElementById('new-post-content').value = '';
+        }
+
+        // Render the profiles page
+        function renderProfiles() {
+            mainContent.innerHTML = `
+                <!-- Current User Profile -->
+                <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                    <img src="${userProfile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
+                    <h2 class="text-xl font-bold text-gray-800">${userProfile?.name}</h2>
+                    <p class="text-gray-600 mb-2">${userProfile?.bio}</p>
+                    <p class="text-xs text-gray-400 mb-4 break-all">User ID: <span class="font-mono text-gray-500 select-all">${userId}</span></p>
+                    <button id="edit-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                </div>
+
+                <!-- All Users List -->
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">Other Users</h3>
+                <div id="users-container" class="space-y-4">
+                    <p class="text-center text-gray-500">Loading users...</p>
+                </div>
+            `;
+
+            document.getElementById('edit-profile-btn').addEventListener('click', async () => {
+                const newName = await showModal("Edit Name", "Enter a new name:", true);
+                if (newName === true) {
+                     const updatedName = prompt("Enter new name:");
+                     if (updatedName) {
+                         const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                         await updateDoc(userDocRef, { name: updatedName });
+                     }
+                }
+                const newBio = await showModal("Edit Bio", "Enter a new bio:", true);
+                if (newBio === true) {
+                     const updatedBio = prompt("Enter new bio:");
+                     if (updatedBio) {
+                         const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                         await updateDoc(userDocRef, { bio: updatedBio });
+                     }
+                }
+            });
+
+            const usersContainer = document.getElementById('users-container');
+            const usersColRef = collection(db, 'artifacts', appId, 'users');
+
+            onSnapshot(usersColRef, (snapshot) => {
+                usersContainer.innerHTML = '';
+                snapshot.docs.forEach(async (userDoc) => {
+                    const otherUserId = userDoc.id;
+                    if (otherUserId !== userId) {
+                        const profileDocRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'profile', 'data');
+                        const profileSnap = await getDoc(profileDocRef);
+                        const otherUser = profileSnap.data();
+
+                        const userElement = document.createElement('div');
+                        userElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm";
+                        userElement.innerHTML = `
+                            <img src="${otherUser?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-12 h-12 rounded-full">
+                            <div>
+                                <p class="font-semibold text-gray-800">${otherUser?.name}</p>
+                                <p class="text-sm text-gray-500">${otherUser?.bio}</p>
+                            </div>
+                            <button data-id="${otherUserId}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
+                        `;
+                        userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId, otherUser.name));
+                        usersContainer.appendChild(userElement);
+                    }
+                });
+            });
+        }
+
+        // Render the messages page (list of sessions)
+        function renderMessages() {
+            mainContent.innerHTML = `
+                <h2 class="text-lg font-bold text-gray-800 mb-4">Messages</h2>
+                <button id="start-new-message-btn" class="w-full bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600 transition-colors mb-4">Start New Message</button>
+                <div id="sessions-container" class="space-y-4">
+                    <p class="text-center text-gray-500">Loading messages...</p>
+                </div>
+            `;
+            
+            document.getElementById('start-new-message-btn').addEventListener('click', async () => {
+                const otherUserId = prompt("Enter the User ID of the person you want to message:");
+                if (otherUserId && otherUserId.trim() !== userId) {
+                    await startNewMessage(otherUserId.trim());
+                } else {
+                    showModal("Error", "Invalid User ID. Cannot message yourself.");
+                }
+            });
+
+            const sessionsContainer = document.getElementById('sessions-container');
+            const sessionsColRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions');
+
+            onSnapshot(sessionsColRef, (snapshot) => {
+                sessionsContainer.innerHTML = '';
+                if (snapshot.empty) {
+                    sessionsContainer.innerHTML = `<p class="text-center text-gray-500 mt-8">No message sessions yet.</p>`;
+                }
+                snapshot.docs.forEach(doc => {
+                    const session = doc.data();
+                    const sessionId = doc.id;
+                    const members = JSON.parse(session.members_json || '[]');
+                    const otherUser = members.find(m => m.id !== userId);
+                    if (!otherUser) return;
+                    
+                    const sessionElement = document.createElement('div');
+                    sessionElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm cursor-pointer hover:bg-gray-50 transition-colors";
+                    sessionElement.innerHTML = `
+                        <img src="${otherUser.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="User" class="w-12 h-12 rounded-full">
+                        <div>
+                            <p class="font-semibold text-gray-800">${otherUser.name}</p>
+                            <p class="text-sm text-gray-500 truncate w-48">${session.lastMessage || 'Start a conversation'}</p>
+                        </div>
+                    `;
+                    sessionElement.addEventListener('click', () => showView('message_session', sessionId));
+                    sessionsContainer.appendChild(sessionElement);
+                });
+            });
+        }
+        
+        // Start a new message session or redirect to an existing one
+        async function startNewMessage(otherUserId) {
+            const sessionsColRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions');
+            const q = query(sessionsColRef, where('members', 'array-contains', otherUserId));
+            const existingSessions = await getDocs(q);
+
+            if (!existingSessions.empty) {
+                const sessionId = existingSessions.docs[0].id;
+                showView('message_session', sessionId);
+            } else {
+                const userProfileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                const otherUserProfileRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'profile', 'data');
+                const [userSnap, otherUserSnap] = await Promise.all([getDoc(userProfileRef), getDoc(otherUserProfileRef)]);
+                
+                if (!otherUserSnap.exists()) {
+                    showModal("Error", "User not found. Please check the User ID.");
+                    return;
+                }
+
+                const userDetails = { id: userId, name: userSnap.data().name, photoURL: userSnap.data().photoURL };
+                const otherUserDetails = { id: otherUserId, name: otherUserSnap.data().name, photoURL: otherUserSnap.data().photoURL };
+                
+                const sessionData = {
+                    members: [userId, otherUserId],
+                    members_json: JSON.stringify([userDetails, otherUserDetails]),
+                    createdAt: serverTimestamp(),
+                    lastMessage: ''
+                };
+                
+                // Create the session for both users
+                const newSessionRef = doc(db, 'artifacts', appId, 'users', userId, 'dm_sessions', otherUserId);
+                await setDoc(newSessionRef, sessionData);
+
+                const otherUserSessionRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', userId);
+                await setDoc(otherUserSessionRef, sessionData);
+
+                showView('message_session', otherUserId);
+            }
+        }
+
+        // Render a single message session
+        function renderMessageSession() {
+            mainContent.innerHTML = `
+                <button id="back-to-messages-btn" class="text-blue-500 mb-4 hover:underline"><i class="fa-solid fa-arrow-left mr-2"></i>Back to messages</button>
+                <div id="messages-list" class="flex flex-col space-y-4 mb-4 overflow-y-auto flex-1 h-full">
+                    <p class="text-center text-gray-500">Loading messages...</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl shadow-md flex items-center space-x-2">
+                    <input type="text" id="new-message-input" class="flex-1 p-2 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type a message...">
+                    <button id="send-message-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors">Send</button>
+                </div>
+            `;
+            
+            document.getElementById('back-to-messages-btn').addEventListener('click', () => showView('messages'));
+            document.getElementById('send-message-btn').addEventListener('click', sendMessage);
+            document.getElementById('new-message-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendMessage();
+            });
+
+            const messagesList = document.getElementById('messages-list');
+            const messagesColRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions', dmSessionId, 'messages');
+            const q = query(messagesColRef);
+
+            onSnapshot(q, (snapshot) => {
+                messagesList.innerHTML = '';
+                const sortedMessages = snapshot.docs.sort((a, b) => a.data().createdAt?.toMillis() - b.data().createdAt?.toMillis());
+                sortedMessages.forEach(doc => {
+                    const message = doc.data();
+                    const isMyMessage = message.from === userId;
+                    const messageClass = isMyMessage ? 'self-end bg-blue-500 text-white rounded-bl-xl' : 'self-start bg-gray-200 text-gray-800 rounded-br-xl';
+                    
+                    const messageElement = document.createElement('div');
+                    messageElement.className = `p-3 rounded-t-xl max-w-[80%] break-words ${messageClass}`;
+                    messageElement.textContent = message.content;
+                    messagesList.appendChild(messageElement);
+                });
+                messagesList.scrollTop = messagesList.scrollHeight; // Auto-scroll to bottom
+            });
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('new-message-input');
+            const content = input.value.trim();
+            if (!content) return;
+
+            const myMessagesRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions', dmSessionId, 'messages');
+            const otherUserMessagesRef = collection(db, 'artifacts', appId, 'users', dmSessionId, 'dm_sessions', userId, 'messages');
+
+            const messageData = {
+                content: content,
+                from: userId,
+                to: dmSessionId,
+                createdAt: serverTimestamp()
+            };
+
+            await Promise.all([
+                addDoc(myMessagesRef, messageData),
+                addDoc(otherUserMessagesRef, messageData)
+            ]);
+            
+            // Update last message in sessions
+            const mySessionDoc = doc(db, 'artifacts', appId, 'users', userId, 'dm_sessions', dmSessionId);
+            const otherSessionDoc = doc(db, 'artifacts', appId, 'users', dmSessionId, 'dm_sessions', userId);
+            await Promise.all([
+                updateDoc(mySessionDoc, { lastMessage: content }),
+                updateDoc(otherSessionDoc, { lastMessage: content })
+            ]);
+
+            input.value = '';
+        }
+
+        // --- Event Listeners ---
+        window.onload = () => {
+            initFirebase();
+            navButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    const view = button.id.replace('nav-', '');
+                    showView(view);
+                });
+            });
+        };
+    </script>
+</body>
+</html>
+
