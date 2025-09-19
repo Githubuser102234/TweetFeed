@@ -117,7 +117,8 @@
             onSnapshot, 
             serverTimestamp,
             getDocs,
-            updateDoc
+            updateDoc,
+            deleteDoc
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
         let db;
@@ -189,7 +190,7 @@
             } catch (error) {
                 console.error("Error initializing Firebase:", error);
                 loadingSpinner.style.display = 'none';
-                showModal("Initialization Error", "Failed to connect to the backend. Please check the console for details.");
+                await showModal("Initialization Error", "Failed to connect to the backend. Please check the console for details.");
             }
         }
         
@@ -199,17 +200,18 @@
             const userDocSnap = await getDoc(userDocRef);
 
             if (!userDocSnap.exists()) {
-                const newProfile = {
-                    name: user.displayName || 'Anonymous User',
-                    photoURL: user.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U',
-                    bio: 'Hello, I am a new user on TweetFeed!',
-                    email: user.email || '',
-                    createdAt: serverTimestamp()
-                };
-                await setDoc(userDocRef, newProfile);
-                userProfile = newProfile;
+                // User is new, redirect to profile creation page
+                if (window.location.pathname !== '/createprofile') {
+                    window.history.pushState({}, '', '/createprofile');
+                    handleUrlChange();
+                }
             } else {
                 userProfile = userDocSnap.data();
+                // If user is on create profile page but already has a profile, redirect to feed
+                if (window.location.pathname === '/createprofile') {
+                     window.history.pushState({}, '', '/');
+                     handleUrlChange();
+                }
             }
         }
 
@@ -251,7 +253,7 @@
                     await signInWithPopup(auth, provider);
                 } catch (error) {
                     console.error("Error during Google sign-in:", error);
-                    showModal("Sign-in Failed", "Could not sign in with Google. Please try again.");
+                    await showModal("Sign-in Failed", "Could not sign in with Google. Please try again.");
                 }
             });
             bottomNav.classList.add('hidden');
@@ -261,9 +263,11 @@
 
         // Simple client-side router
         window.handleUrlChange = () => {
-            const path = window.location.pathname.toLowerCase();
+            const path = window.location.pathname;
             if (!userId) {
-                renderLoginScreen();
+                if (path !== '/createprofile') {
+                    renderLoginScreen();
+                }
                 return;
             }
             
@@ -272,21 +276,23 @@
             // Hide all nav buttons' active state
             navButtons.forEach(btn => btn.classList.replace('text-blue-500', 'text-gray-500'));
             
-            if (path.startsWith('/profiles')) {
+            if (path === '/createprofile') {
+                renderCreateProfilePage();
+            } else if (path === '/editprofile') {
+                renderEditProfilePage();
+            } else if (path.startsWith('/profiles/@')) {
+                renderUserProfilePage(path.split('/@')[1]);
+            } else if (path.startsWith('/profiles')) {
                 document.getElementById('nav-profiles').classList.replace('text-gray-500', 'text-blue-500');
                 renderProfiles();
             } else if (path.startsWith('/messages')) {
                 document.getElementById('nav-messages').classList.replace('text-gray-500', 'text-blue-500');
                 renderMessages();
-            } else if (path.startsWith('/message')) {
-                document.getElementById('nav-messages').classList.replace('text-gray-500', 'text-blue-500');
-                const parts = path.split('/');
-                const dmSessionId = parts[2] || null;
-                if (dmSessionId) {
-                    renderMessageSession(dmSessionId);
-                } else {
-                    renderMessages();
-                }
+            } else if (path.startsWith('/message/')) {
+                 document.getElementById('nav-messages').classList.replace('text-gray-500', 'text-blue-500');
+                 renderMessageSession(path.split('/')[2]);
+            } else if (path.startsWith('/share/')) {
+                 renderSharePage(path.split('/')[2]);
             } else {
                 document.getElementById('nav-feed').classList.replace('text-gray-500', 'text-blue-500');
                 renderFeed();
@@ -295,13 +301,115 @@
 
         window.showView = (viewName, data = null) => {
             let newPath = '/';
-            if (viewName === 'profiles') newPath = '/profiles';
+            if (viewName === 'createprofile') newPath = '/createprofile';
+            else if (viewName === 'editprofile') newPath = '/editprofile';
+            else if (viewName === 'profiles') newPath = '/profiles';
+            else if (viewName === 'user_profile' && data) newPath = `/profiles/@${data}`;
             else if (viewName === 'messages') newPath = '/messages';
             else if (viewName === 'message_session' && data) newPath = `/message/${data}`;
+            else if (viewName === 'share' && data) newPath = `/share/${data}`;
             
             window.history.pushState({}, '', newPath);
             handleUrlChange();
         };
+
+        // --- New View for Profile Creation ---
+        function renderCreateProfilePage() {
+            mainContent.innerHTML = `
+                <div class="p-6 bg-white rounded-xl shadow-xl">
+                    <h2 class="text-2xl font-bold mb-4 text-center">Create Your Profile</h2>
+                    <p class="text-gray-600 mb-6 text-center">Your username will be permanent and unique.</p>
+                    <form id="create-profile-form" class="space-y-4">
+                        <div>
+                            <label for="display-name" class="block text-sm font-medium text-gray-700">Display Name (Optional)</label>
+                            <input type="text" id="display-name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:border-blue-500 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label for="username" class="block text-sm font-medium text-gray-700">Username (Permanent)</label>
+                            <input type="text" id="username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:border-blue-500 focus:ring-blue-500" required>
+                        </div>
+                        <div>
+                            <label for="bio" class="block text-sm font-medium text-gray-700">Bio</label>
+                            <textarea id="bio" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:border-blue-500 focus:ring-blue-500"></textarea>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-500 text-white py-2 px-4 rounded-lg font-semibold hover:bg-blue-600 transition-colors">Create Profile</button>
+                    </form>
+                </div>
+            `;
+            document.getElementById('create-profile-form').addEventListener('submit', createProfile);
+            bottomNav.classList.add('hidden');
+            authContainer.innerHTML = '';
+        }
+
+        async function createProfile(e) {
+            e.preventDefault();
+            const displayName = document.getElementById('display-name').value;
+            const username = document.getElementById('username').value.toLowerCase().trim();
+            const bio = document.getElementById('bio').value;
+
+            if (!username) {
+                await showModal("Error", "Username is required.");
+                return;
+            }
+
+            // Check if username is already taken
+            const usersColRef = collection(db, 'artifacts', appId, 'users');
+            const q = query(usersColRef, where('username', '==', username));
+            const querySnapshot = await getDocs(q);
+            if (!querySnapshot.empty) {
+                await showModal("Error", "Username already taken. Please choose another.");
+                return;
+            }
+
+            const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+            const newProfile = {
+                displayName: displayName || auth.currentUser.displayName,
+                username: username,
+                bio: bio,
+                photoURL: auth.currentUser.photoURL,
+                email: auth.currentUser.email,
+                createdAt: serverTimestamp()
+            };
+            await setDoc(userDocRef, newProfile);
+            userProfile = newProfile;
+            window.history.pushState({}, '', '/');
+            handleUrlChange();
+        }
+
+        // --- New View for Profile Editing ---
+        function renderEditProfilePage() {
+            if (!userProfile) return;
+            mainContent.innerHTML = `
+                <div class="p-6 bg-white rounded-xl shadow-xl">
+                    <h2 class="text-2xl font-bold mb-4 text-center">Edit Your Profile</h2>
+                    <form id="edit-profile-form" class="space-y-4">
+                        <div>
+                            <label for="display-name" class="block text-sm font-medium text-gray-700">Display Name</label>
+                            <input type="text" id="display-name" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:border-blue-500 focus:ring-blue-500" value="${userProfile.displayName}">
+                        </div>
+                        <div>
+                            <label for="username" class="block text-sm font-medium text-gray-700">Username (Permanent)</label>
+                            <input type="text" id="username" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 bg-gray-100 cursor-not-allowed" value="${userProfile.username}" readonly>
+                        </div>
+                        <div>
+                            <label for="bio" class="block text-sm font-medium text-gray-700">Bio</label>
+                            <textarea id="bio" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 focus:border-blue-500 focus:ring-blue-500">${userProfile.bio}</textarea>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-500 text-white py-2 px-4 rounded-lg font-semibold hover:bg-blue-600 transition-colors">Save Changes</button>
+                    </form>
+                </div>
+            `;
+            document.getElementById('edit-profile-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const newDisplayName = document.getElementById('display-name').value;
+                const newBio = document.getElementById('bio').value;
+
+                const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+                await updateDoc(userDocRef, { displayName: newDisplayName, bio: newBio });
+                await showModal("Success", "Profile updated successfully!");
+                showView('profiles');
+            });
+        }
 
         // Render the main feed
         function renderFeed() {
@@ -334,27 +442,100 @@
                     postsContainer.innerHTML = `<p class="text-center text-gray-500 mt-8">No posts yet. Be the first to post!</p>`;
                 } else {
                     const sortedDocs = snapshot.docs.sort((a, b) => b.data().createdAt?.toMillis() - a.data().createdAt?.toMillis());
-                    sortedDocs.forEach(doc => {
+                    sortedDocs.forEach(async (doc) => {
                         const post = doc.data();
+                        const postId = doc.id;
                         const postElement = document.createElement('div');
                         postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
                         
                         const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
 
+                        const likesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes');
+                        const dislikesColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes');
+                        
+                        // Real-time listener for likes and dislikes
+                        onSnapshot(likesColRef, (likesSnap) => {
+                            const likesCount = likesSnap.docs.length;
+                            const isLiked = likesSnap.docs.some(d => d.id === userId);
+                            const likesBtn = postElement.querySelector('.like-btn');
+                            if (likesBtn) {
+                                likesBtn.innerHTML = `<i class="${isLiked ? 'fa-solid text-red-500' : 'fa-regular'} fa-heart mr-1"></i> ${likesCount}`;
+                            }
+                        });
+
+                        onSnapshot(dislikesColRef, (dislikesSnap) => {
+                            const dislikesCount = dislikesSnap.docs.length;
+                            const isDisliked = dislikesSnap.docs.some(d => d.id === userId);
+                            const dislikesBtn = postElement.querySelector('.dislike-btn');
+                            if (dislikesBtn) {
+                                dislikesBtn.innerHTML = `<i class="${isDisliked ? 'fa-solid text-blue-500' : 'fa-regular'} fa-thumbs-down mr-1"></i> ${dislikesCount}`;
+                            }
+                        });
+                        
                         postElement.innerHTML = `
-                            <div class="flex items-center space-x-3 mb-2">
-                                <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
-                                <div>
-                                    <p class="font-semibold text-gray-800">${post.name}</p>
-                                    <p class="text-xs text-gray-500">${timeString}</p>
+                            <div class="flex items-start justify-between">
+                                <div class="flex items-center space-x-3 mb-2">
+                                    <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                                    <div>
+                                        <p class="font-semibold text-gray-800">${post.displayName || post.name}</p>
+                                        <p class="text-xs text-gray-500">@${post.username || 'unknown'}</p>
+                                        <p class="text-xs text-gray-500">${timeString}</p>
+                                    </div>
                                 </div>
+                                ${post.userId === userId ? `
+                                    <button class="delete-btn text-gray-400 hover:text-red-500 transition-colors">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>
+                                ` : ''}
                             </div>
-                            <p class="text-gray-700 leading-relaxed">${post.content}</p>
+                            <p class="text-gray-700 leading-relaxed mb-4">${post.content}</p>
+                            <div class="flex items-center justify-around text-gray-500 text-sm">
+                                <button class="like-btn flex items-center space-x-1 hover:text-red-500 transition-colors" data-id="${postId}">
+                                    <i class="fa-regular fa-heart"></i>
+                                    <span>0</span>
+                                </button>
+                                <button class="dislike-btn flex items-center space-x-1 hover:text-blue-500 transition-colors" data-id="${postId}">
+                                    <i class="fa-regular fa-thumbs-down"></i>
+                                    <span>0</span>
+                                </button>
+                                <button class="share-btn flex items-center space-x-1 hover:text-green-500 transition-colors" data-id="${postId}">
+                                    <i class="fa-solid fa-share"></i>
+                                    <span>Share</span>
+                                </button>
+                            </div>
                         `;
+                        
                         postsContainer.appendChild(postElement);
+                        
+                        // Add event listeners
+                        if (post.userId === userId) {
+                            postElement.querySelector('.delete-btn')?.addEventListener('click', () => deletePost(postId));
+                        }
+                        postElement.querySelector('.like-btn')?.addEventListener('click', () => likePost(postId));
+                        postElement.querySelector('.dislike-btn')?.addEventListener('click', () => dislikePost(postId));
+                        postElement.querySelector('.share-btn')?.addEventListener('click', () => showView('share', postId));
                     });
                 }
             });
+        }
+
+        async function deletePost(postId) {
+            const confirmed = await showModal("Delete Post", "Are you sure you want to delete this post?", true);
+            if (confirmed) {
+                const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+                await deleteDoc(postDocRef);
+                await showModal("Success", "Post deleted.");
+            }
+        }
+        
+        async function likePost(postId) {
+            const likeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'likes', userId);
+            await setDoc(likeDocRef, { timestamp: serverTimestamp() });
+        }
+        
+        async function dislikePost(postId) {
+            const dislikeDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId, 'dislikes', userId);
+            await setDoc(dislikeDocRef, { timestamp: serverTimestamp() });
         }
 
         // Post a new tweet
@@ -368,12 +549,42 @@
             const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
             await addDoc(postsColRef, {
                 content: content,
-                name: userProfile.name,
+                displayName: userProfile.displayName,
+                username: userProfile.username,
                 photoURL: userProfile.photoURL,
                 userId: userId,
                 createdAt: serverTimestamp()
             });
             document.getElementById('new-post-content').value = '';
+        }
+        
+        // Render a single user's profile page
+        function renderUserProfilePage(username) {
+            mainContent.innerHTML = `<div class="p-6 text-center text-gray-500">Loading profile...</div>`;
+            const usersColRef = collection(db, 'artifacts', appId, 'users');
+            const q = query(usersColRef, where('username', '==', username));
+
+            onSnapshot(q, (snapshot) => {
+                if (snapshot.empty) {
+                    mainContent.innerHTML = `<div class="p-6 text-center text-red-500">User @${username} not found.</div>`;
+                    return;
+                }
+                const userDoc = snapshot.docs[0];
+                const profile = userDoc.data();
+                const profileUserId = userDoc.id;
+
+                mainContent.innerHTML = `
+                    <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                        <img src="${profile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
+                        <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
+                        <p class="text-gray-600 mb-2">@${profile?.username}</p>
+                        <p class="text-gray-600 mb-2">${profile?.bio}</p>
+                        ${profileUserId === userId ? `
+                            <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                        ` : ''}
+                    </div>
+                `;
+            });
         }
 
         // Render the profiles page
@@ -382,10 +593,10 @@
                 <!-- Current User Profile -->
                 <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
                     <img src="${userProfile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
-                    <h2 class="text-xl font-bold text-gray-800">${userProfile?.name}</h2>
+                    <h2 class="text-xl font-bold text-gray-800">${userProfile?.displayName}</h2>
+                    <p class="text-gray-600 mb-2">@${userProfile?.username}</p>
                     <p class="text-gray-600 mb-2">${userProfile?.bio}</p>
-                    <p class="text-xs text-gray-400 mb-4 break-all">User ID: <span class="font-mono text-gray-500 select-all">${userId}</span></p>
-                    <button id="edit-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                    <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
                 </div>
 
                 <!-- All Users List -->
@@ -395,45 +606,27 @@
                 </div>
             `;
 
-            document.getElementById('edit-profile-btn').addEventListener('click', async () => {
-                const confirmed = await showModal("Edit Profile", "Do you want to edit your profile?", true);
-                if (confirmed) {
-                    const newName = window.prompt("Enter new name:");
-                    if (newName) {
-                        const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
-                        await updateDoc(userDocRef, { name: newName });
-                    }
-                    const newBio = window.prompt("Enter new bio:");
-                    if (newBio) {
-                        const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
-                        await updateDoc(userDocRef, { bio: newBio });
-                    }
-                }
-            });
-
             const usersContainer = document.getElementById('users-container');
             const usersColRef = collection(db, 'artifacts', appId, 'users');
-
+            
+            // onSnapshot listener for a more efficient and real-time user list
             onSnapshot(usersColRef, (snapshot) => {
                 usersContainer.innerHTML = '';
                 snapshot.docs.forEach(async (userDoc) => {
+                    const profileData = userDoc.data().profile.data;
                     const otherUserId = userDoc.id;
                     if (otherUserId !== userId) {
-                        const profileDocRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'profile', 'data');
-                        const profileSnap = await getDoc(profileDocRef);
-                        const otherUser = profileSnap.data();
-
                         const userElement = document.createElement('div');
                         userElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm";
                         userElement.innerHTML = `
-                            <img src="${otherUser?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-12 h-12 rounded-full">
+                            <img src="${profileData?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-12 h-12 rounded-full">
                             <div>
-                                <p class="font-semibold text-gray-800">${otherUser?.name}</p>
-                                <p class="text-sm text-gray-500">${otherUser?.bio}</p>
+                                <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
+                                <p class="text-sm text-gray-500">${profileData?.bio}</p>
                             </div>
                             <button data-id="${otherUserId}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
                         `;
-                        userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId, otherUser.name));
+                        userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId));
                         usersContainer.appendChild(userElement);
                     }
                 });
@@ -458,7 +651,7 @@
                 if (otherUserId && otherUserId.trim() !== userId) {
                     await startNewMessage(otherUserId.trim());
                 } else {
-                    showModal("Error", "Invalid User ID. Cannot message yourself.");
+                    await showModal("Error", "Invalid User ID. Cannot message yourself.");
                 }
             });
 
@@ -478,25 +671,22 @@
                     const sessionElement = document.createElement('div');
                     sessionElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm cursor-pointer hover:bg-gray-50 transition-colors";
                     sessionElement.innerHTML = `
-                        <img src="${session.members_json ? JSON.parse(session.members_json).find(m => m.id === otherUserId)?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U' : 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="User" class="w-12 h-12 rounded-full">
+                        <img src="${JSON.parse(session.members_json).find(m => m.id === otherUserId)?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="User" class="w-12 h-12 rounded-full">
                         <div>
-                            <p class="font-semibold text-gray-800">${session.members_json ? JSON.parse(session.members_json).find(m => m.id === otherUserId)?.name || 'Unknown User' : 'Unknown User'}</p>
+                            <p class="font-semibold text-gray-800">${JSON.parse(session.members_json).find(m => m.id === otherUserId)?.displayName || 'Unknown User'}</p>
                             <p class="text-sm text-gray-500 truncate w-48">${session.lastMessage || 'Start a conversation'}</p>
                         </div>
                     `;
-                    sessionElement.addEventListener('click', () => showView('message_session', otherUserId));
+                    sessionElement.addEventListener('click', () => showView('message_session', doc.id));
                     sessionsContainer.appendChild(sessionElement);
                 });
             });
         }
         
-        // Start a new message session or redirect to an existing one
         async function startNewMessage(otherUserId) {
             const sessionPath = [userId, otherUserId].sort().join('_');
             const mySessionRef = doc(db, 'artifacts', appId, 'users', userId, 'dm_sessions', sessionPath);
-            const otherUserSessionRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', sessionPath);
-            
-            const [mySnap, otherSnap] = await Promise.all([getDoc(mySessionRef), getDoc(otherUserSessionRef)]);
+            const mySnap = await getDoc(mySessionRef);
             
             if (!mySnap.exists()) {
                 const userProfileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
@@ -504,12 +694,12 @@
                 const [userSnap, otherUserSnap] = await Promise.all([getDoc(userProfileRef), getDoc(otherUserProfileRef)]);
                 
                 if (!otherUserSnap.exists()) {
-                    showModal("Error", "User not found. Please check the User ID.");
+                    await showModal("Error", "User not found. Please check the User ID.");
                     return;
                 }
 
-                const userDetails = { id: userId, name: userSnap.data().name, photoURL: userSnap.data().photoURL };
-                const otherUserDetails = { id: otherUserId, name: otherUserSnap.data().name, photoURL: otherUserSnap.data().photoURL };
+                const userDetails = { id: userId, displayName: userSnap.data().displayName, photoURL: userSnap.data().photoURL };
+                const otherUserDetails = { id: otherUserId, displayName: otherUserSnap.data().displayName, photoURL: otherUserSnap.data().photoURL };
                 
                 const sessionData = {
                     members: [userId, otherUserId],
@@ -518,6 +708,7 @@
                     lastMessage: ''
                 };
                 
+                const otherUserSessionRef = doc(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', sessionPath);
                 await Promise.all([
                     setDoc(mySessionRef, sessionData),
                     setDoc(otherUserSessionRef, sessionData)
@@ -526,7 +717,6 @@
             showView('message_session', sessionPath);
         }
 
-        // Render a single message session
         function renderMessageSession(dmSessionId) {
             mainContent.innerHTML = `
                 <button id="back-to-messages-btn" class="text-blue-500 mb-4 hover:underline"><i class="fa-solid fa-arrow-left mr-2"></i>Back to messages</button>
@@ -571,11 +761,12 @@
             const content = input.value.trim();
             if (!content) return;
             
-            const sessionPath = [userId, dmSessionId].sort().join('_');
+            const urlPath = window.location.pathname.split('/');
+            const dmSessionId = urlPath[2];
             const otherUserId = dmSessionId.replace(userId, '').replace('_', '');
 
-            const myMessagesRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions', sessionPath, 'messages');
-            const otherUserMessagesRef = collection(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', sessionPath, 'messages');
+            const myMessagesRef = collection(db, 'artifacts', appId, 'users', userId, 'dm_sessions', dmSessionId, 'messages');
+            const otherUserMessagesRef = collection(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', dmSessionId, 'messages');
 
             const messageData = {
                 content: content,
@@ -589,15 +780,62 @@
                 addDoc(otherUserMessagesRef, messageData)
             ]);
             
-            // Update last message in sessions
-            const mySessionDoc = doc(db, 'artifacts', appId, 'users', userId, 'dm_sessions', sessionPath);
-            const otherSessionDoc = doc(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', sessionPath);
+            const mySessionDoc = doc(db, 'artifacts', appId, 'users', userId, 'dm_sessions', dmSessionId);
+            const otherSessionDoc = doc(db, 'artifacts', appId, 'users', otherUserId, 'dm_sessions', dmSessionId);
             await Promise.all([
                 updateDoc(mySessionDoc, { lastMessage: content }),
                 updateDoc(otherSessionDoc, { lastMessage: content })
             ]);
 
             input.value = '';
+        }
+
+        function renderSharePage(postId) {
+            mainContent.innerHTML = `
+                <div class="p-6 bg-white rounded-xl shadow-xl text-center">
+                    <h2 class="text-2xl font-bold mb-4">Share This Post</h2>
+                    <p class="text-gray-600 mb-4">Copy the link below to share this post with others.</p>
+                    <div class="flex items-center space-x-2 bg-gray-100 rounded-lg p-2 mb-4">
+                        <input type="text" id="share-link-input" class="flex-1 bg-transparent border-none focus:outline-none" value="${window.location.origin}/share/${postId}" readonly>
+                        <button id="copy-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors">Copy</button>
+                    </div>
+                    <div id="post-to-share" class="bg-gray-50 p-4 rounded-xl shadow-sm">
+                        <p class="text-gray-500">Loading post...</p>
+                    </div>
+                    <button onclick="window.history.back()" class="mt-4 text-blue-500 hover:underline">Go back</button>
+                </div>
+            `;
+            
+            document.getElementById('copy-btn').addEventListener('click', () => {
+                const linkInput = document.getElementById('share-link-input');
+                linkInput.select();
+                document.execCommand('copy');
+                showModal("Copied!", "Link copied to clipboard.");
+            });
+            
+            const postToShareContainer = document.getElementById('post-to-share');
+            const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+            
+            onSnapshot(postDocRef, (doc) => {
+                if (!doc.exists()) {
+                    postToShareContainer.innerHTML = `<p class="text-red-500">Post not found.</p>`;
+                    return;
+                }
+                const post = doc.data();
+                const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
+
+                postToShareContainer.innerHTML = `
+                    <div class="flex items-center space-x-3 mb-2">
+                        <img src="${post.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                        <div>
+                            <p class="font-semibold text-gray-800">${post.displayName || post.name}</p>
+                            <p class="text-xs text-gray-500">@${post.username || 'unknown'}</p>
+                            <p class="text-xs text-gray-500">${timeString}</p>
+                        </div>
+                    </div>
+                    <p class="text-gray-700 leading-relaxed">${post.content}</p>
+                `;
+            });
         }
 
         // --- Event Listeners ---
