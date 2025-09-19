@@ -658,7 +658,7 @@
                                 ${profileUserId === userId ? `
                                     <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
                                 ` : `
-                                    <button onclick="startNewMessage('${profileUserId}')" class="bg-blue-500 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-600 transition-colors">Message User</button>
+                                    <button onclick="startNewMessageByUsername('${profile.username}')" class="bg-blue-500 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-600 transition-colors">Message User</button>
                                 `}
                                 <button id="share-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
                             </div>
@@ -739,9 +739,13 @@
                                     <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
                                     <p class="text-sm text-gray-500">${profileData?.bio}</p>
                                 </div>
-                                <button data-id="${otherUserId}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
+                                <button data-username="${profileData.username}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
                             `;
-                            userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId));
+                            userElement.querySelector('button').addEventListener('click', (e) => {
+                                e.stopPropagation(); // Prevent the parent div's click event
+                                const username = e.currentTarget.getAttribute('data-username');
+                                startNewMessageByUsername(username);
+                            });
                             userElement.addEventListener('click', () => showView('user_profile', profileData.username));
                             usersContainer.appendChild(userElement);
                         }
@@ -755,7 +759,7 @@
             mainContent.innerHTML = `
                 <h2 class="text-lg font-bold text-gray-800 mb-4">Messages</h2>
                 <div class="flex items-center space-x-2 mb-4">
-                    <input type="text" id="start-new-message-id" class="flex-1 p-2 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter User ID to message...">
+                    <input type="text" id="start-new-message-username" class="flex-1 p-2 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter a username to message...">
                     <button id="start-new-message-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg font-semibold hover:bg-blue-600 transition-colors">Start</button>
                 </div>
                 <div id="sessions-container" class="space-y-4">
@@ -764,11 +768,11 @@
             `;
             
             document.getElementById('start-new-message-btn').addEventListener('click', async () => {
-                const otherUserId = document.getElementById('start-new-message-id').value.trim();
-                if (otherUserId && otherUserId.trim() !== userId) {
-                    await startNewMessage(otherUserId.trim());
+                const username = document.getElementById('start-new-message-username').value.trim();
+                if (username) {
+                    await startNewMessageByUsername(username);
                 } else {
-                    await showModal("Error", "Invalid User ID. Cannot message yourself.");
+                    await showModal("Error", "Please enter a username.");
                 }
             });
 
@@ -802,6 +806,31 @@
                     sessionsContainer.appendChild(sessionElement);
                 }
             });
+        }
+        
+        async function startNewMessageByUsername(username) {
+            const sanitizedUsername = username.toLowerCase().replace('@', '').trim();
+            if (!sanitizedUsername) {
+                await showModal("Error", "Username cannot be empty.");
+                return;
+            }
+            
+            const usernameRef = doc(db, 'artifacts', appId, 'public', 'data', 'usernames', sanitizedUsername);
+            const usernameSnap = await getDoc(usernameRef);
+            
+            if (!usernameSnap.exists()) {
+                await showModal("Error", "Username not found. Please check spelling.");
+                return;
+            }
+            
+            const otherUserId = usernameSnap.data().userId;
+            
+            if (otherUserId === userId) {
+                await showModal("Error", "You cannot message yourself.");
+                return;
+            }
+            
+            await startNewMessage(otherUserId);
         }
         
         async function startNewMessage(otherUserId) {
