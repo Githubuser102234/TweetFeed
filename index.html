@@ -355,9 +355,21 @@
             }
 
             const usersColRef = collection(db, 'artifacts', appId, 'users');
-            const q = query(usersColRef, where('profile.data.username', '==', username));
-            const querySnapshot = await getDocs(q);
-            if (!querySnapshot.empty) {
+            
+            // To check for unique usernames, we have to get all user profiles and check locally.
+            // There is no efficient Firestore query for subcollection fields.
+            const allUsersSnap = await getDocs(usersColRef);
+            let usernameExists = false;
+            for (const userDoc of allUsersSnap.docs) {
+                const profileRef = doc(userDoc.ref, 'profile', 'data');
+                const profileSnap = await getDoc(profileRef);
+                if (profileSnap.exists() && profileSnap.data().username === username) {
+                    usernameExists = true;
+                    break;
+                }
+            }
+
+            if (usernameExists) {
                 await showModal("Error", "Username already taken. Please choose another.");
                 return;
             }
@@ -450,7 +462,10 @@
                         
                         const authorProfileRef = doc(db, 'artifacts', appId, 'users', post.userId, 'profile', 'data');
                         const authorProfileSnap = await getDoc(authorProfileRef);
-                        const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: true };
+                        
+                        // FIX: Changed from `{ isBanned: true }` to `{ isBanned: false }` to fix the bug where all posts were hidden.
+                        // A non-existent profile does not mean the user is banned.
+                        const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: false };
 
                         if (authorProfile.isBanned) continue;
 
@@ -589,52 +604,64 @@
         function renderUserProfilePage(username) {
             mainContent.innerHTML = `<div class="p-6 text-center text-gray-500">Loading profile...</div>`;
             const usersColRef = collection(db, 'artifacts', appId, 'users');
-            const q = query(usersColRef, where('profile.data.username', '==', username));
+            
+            // FIX: Refactored to fetch all user documents and then check their sub-collection
+            // for the correct username. This avoids the invalid Firestore query.
+            getDocs(usersColRef).then(async (usersSnap) => {
+                let profileFound = false;
+                for (const userDoc of usersSnap.docs) {
+                    const profileDataRef = doc(userDoc.ref, 'profile', 'data');
+                    const profileSnap = await getDoc(profileDataRef);
+                    
+                    if (profileSnap.exists() && profileSnap.data().username === username) {
+                        profileFound = true;
+                        const profile = profileSnap.data();
+                        const profileUserId = userDoc.id;
 
-            onSnapshot(q, (snapshot) => {
-                if (snapshot.empty) {
+                        if (profile.isBanned) {
+                            mainContent.innerHTML = `
+                                <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                                    <i class="fa-solid fa-ban text-6xl text-red-500 mb-4"></i>
+                                    <h2 class="text-xl font-bold text-gray-800">Account Banned</h2>
+                                    <p class="text-gray-600 mb-2">@${profile.username}</p>
+                                    <p class="text-gray-400">This account is no longer active.</p>
+                                </div>
+                            `;
+                            return;
+                        }
+
+                        mainContent.innerHTML = `
+                            <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                                <img src="${profile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
+                                <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
+                                <p class="text-gray-600 mb-2">@${profile?.username}</p>
+                                <p class="text-gray-600 mb-2">${profile?.bio}</p>
+                                <div class="flex justify-center space-x-2 mt-4">
+                                    ${profileUserId === userId ? `
+                                        <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
+                                    ` : ''}
+                                    <button id="share-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
+                                </div>
+                            </div>
+                        `;
+                        document.getElementById('share-profile-btn').addEventListener('click', () => {
+                            const profileLink = `${window.location.origin}/profiles/@${profile.username}`;
+                            navigator.clipboard.writeText(profileLink).then(() => {
+                                showModal("Copied!", "Profile link copied to clipboard.");
+                            }).catch(err => {
+                                console.error('Could not copy text: ', err);
+                                showModal("Error", "Could not copy link to clipboard.");
+                            });
+                        });
+                        break; // Stop loop once profile is found
+                    }
+                }
+                if (!profileFound) {
                     mainContent.innerHTML = `<div class="p-6 text-center text-red-500">User @${username} not found.</div>`;
-                    return;
                 }
-                const userDoc = snapshot.docs[0];
-                const profile = userDoc.data().profile.data;
-                const profileUserId = userDoc.id;
-
-                if (profile.isBanned) {
-                    mainContent.innerHTML = `
-                        <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
-                            <i class="fa-solid fa-ban text-6xl text-red-500 mb-4"></i>
-                            <h2 class="text-xl font-bold text-gray-800">Account Banned</h2>
-                            <p class="text-gray-600 mb-2">@${profile.username}</p>
-                            <p class="text-gray-400">This account is no longer active.</p>
-                        </div>
-                    `;
-                    return;
-                }
-
-                mainContent.innerHTML = `
-                    <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
-                        <img src="${profile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
-                        <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
-                        <p class="text-gray-600 mb-2">@${profile?.username}</p>
-                        <p class="text-gray-600 mb-2">${profile?.bio}</p>
-                        <div class="flex justify-center space-x-2 mt-4">
-                            ${profileUserId === userId ? `
-                                <button onclick="showView('editprofile')" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
-                            ` : ''}
-                            <button id="share-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Share Profile</button>
-                        </div>
-                    </div>
-                `;
-                document.getElementById('share-profile-btn').addEventListener('click', () => {
-                    const profileLink = `${window.location.origin}/profiles/@${profile.username}`;
-                    navigator.clipboard.writeText(profileLink).then(() => {
-                        showModal("Copied!", "Profile link copied to clipboard.");
-                    }).catch(err => {
-                        console.error('Could not copy text: ', err);
-                        showModal("Error", "Could not copy link to clipboard.");
-                    });
-                });
+            }).catch(error => {
+                console.error("Error fetching user profiles:", error);
+                mainContent.innerHTML = `<div class="p-6 text-center text-red-500">Error loading profile.</div>`;
             });
         }
 
@@ -673,25 +700,34 @@
             const usersContainer = document.getElementById('users-container');
             const usersColRef = collection(db, 'artifacts', appId, 'users');
             
+            // FIX: Refactored to fetch the sub-collection profile data for each user document
+            // to correctly render their information and check for banned status.
             onSnapshot(usersColRef, async (snapshot) => {
                 usersContainer.innerHTML = '';
                 for (const userDoc of snapshot.docs) {
-                    const profileData = userDoc.data().profile.data;
                     const otherUserId = userDoc.id;
                     if (otherUserId !== userId) {
-                        const userElement = document.createElement('div');
-                        userElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm";
-                        userElement.innerHTML = `
-                            <img src="${profileData?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-12 h-12 rounded-full">
-                            <div>
-                                <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
-                                <p class="text-sm text-gray-500">${profileData?.bio}</p>
-                            </div>
-                            <button data-id="${otherUserId}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
-                        `;
-                        userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId));
-                        userElement.addEventListener('click', () => showView('user_profile', profileData.username));
-                        usersContainer.appendChild(userElement);
+                        const profileRef = doc(userDoc.ref, 'profile', 'data');
+                        const profileSnap = await getDoc(profileRef);
+
+                        if (profileSnap.exists()) {
+                            const profileData = profileSnap.data();
+                            if (profileData.isBanned) continue; // Skip banned users
+
+                            const userElement = document.createElement('div');
+                            userElement.className = "flex items-center space-x-4 bg-white p-4 rounded-xl shadow-sm";
+                            userElement.innerHTML = `
+                                <img src="${profileData?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-12 h-12 rounded-full">
+                                <div>
+                                    <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
+                                    <p class="text-sm text-gray-500">${profileData?.bio}</p>
+                                </div>
+                                <button data-id="${otherUserId}" class="ml-auto bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Message</button>
+                            `;
+                            userElement.querySelector('button').addEventListener('click', () => startNewMessage(otherUserId));
+                            userElement.addEventListener('click', () => showView('user_profile', profileData.username));
+                            usersContainer.appendChild(userElement);
+                        }
                     }
                 }
             });
@@ -891,10 +927,12 @@
                     return;
                 }
                 const post = doc.data();
-
                 const authorProfileRef = doc(db, 'artifacts', appId, 'users', post.userId, 'profile', 'data');
                 const authorProfileSnap = await getDoc(authorProfileRef);
-                const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: true };
+                
+                // FIX: Changed from `{ isBanned: true }` to `{ isBanned: false }` to fix the bug where posts were hidden.
+                // A non-existent profile does not mean the user is banned.
+                const authorProfile = authorProfileSnap.exists() ? authorProfileSnap.data() : { isBanned: false };
 
                 if (authorProfile.isBanned) {
                     postToShareContainer.innerHTML = `<p class="text-red-500">This post is from a banned user and cannot be shared.</p>`;
