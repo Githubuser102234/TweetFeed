@@ -11,6 +11,29 @@
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f7fafc;
+            transition: background-color 0.3s ease;
+        }
+        .dark-mode {
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+        .dark-mode .bg-white {
+            background-color: #2d3748;
+        }
+        .dark-mode .bg-gray-50 {
+            background-color: #4a5568;
+        }
+        .dark-mode .bg-gray-100 {
+            background-color: #2d3748;
+        }
+        .dark-mode .text-gray-800, .dark-mode .text-gray-700 {
+            color: #e2e8f0;
+        }
+        .dark-mode .text-gray-600, .dark-mode .text-gray-500 {
+            color: #a0aec0;
+        }
+        .dark-mode .border-gray-200 {
+            border-color: #4a5568;
         }
         .modal {
             display: none; /* Hidden by default */
@@ -51,7 +74,7 @@
         </main>
 
         <!-- Bottom Navigation Bar -->
-        <nav id="bottom-nav" class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-200 grid grid-cols-3 z-20 hidden">
+        <nav id="bottom-nav" class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-200 grid grid-cols-4 z-20 hidden">
             <button id="nav-feed" class="flex flex-col items-center justify-center py-2 px-4 text-blue-500 hover:bg-gray-100 transition-colors">
                 <i class="fa-solid fa-home text-2xl"></i>
                 <span class="text-xs mt-1">Feed</span>
@@ -59,6 +82,10 @@
             <button id="nav-profiles" class="flex flex-col items-center justify-center py-2 px-4 text-gray-500 hover:bg-gray-100 transition-colors">
                 <i class="fa-solid fa-user-group text-2xl"></i>
                 <span class="text-xs mt-1">Profiles</span>
+            </button>
+            <button id="nav-search" class="flex flex-col items-center justify-center py-2 px-4 text-gray-500 hover:bg-gray-100 transition-colors">
+                <i class="fa-solid fa-magnifying-glass text-2xl"></i>
+                <span class="text-xs mt-1">Search</span>
             </button>
             <button id="nav-messages" class="flex flex-col items-center justify-center py-2 px-4 text-gray-500 hover:bg-gray-100 transition-colors">
                 <i class="fa-solid fa-comment-dots text-2xl"></i>
@@ -138,8 +165,10 @@
         let auth;
         let userId = null;
         let userProfile;
+        let userSettings;
         
         // UI elements
+        const body = document.body;
         const mainContent = document.getElementById('main-content');
         const bottomNav = document.getElementById('bottom-nav');
         const navButtons = bottomNav.querySelectorAll('button');
@@ -196,13 +225,15 @@
                     loadingSpinner.style.display = 'none';
                     if (user) {
                         userId = user.uid;
-                        await checkAndSetUserProfile(user);
+                        await checkAndSetUserProfileAndSettings(user);
                         renderAuthStatus(user);
                     } else {
                         userId = null;
                         userProfile = null;
+                        userSettings = null;
                         renderAuthStatus(null);
                         renderLoginScreen();
+                        body.classList.remove('dark-mode');
                     }
                 });
             } catch (error) {
@@ -213,9 +244,20 @@
         }
         
         // Checks for profile and handles routing
-        async function checkAndSetUserProfile(user) {
+        async function checkAndSetUserProfileAndSettings(user) {
             const userDocRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
             const userDocSnap = await getDoc(userDocRef);
+            
+            // Fetch user settings
+            const userSettingsRef = doc(db, 'artifacts', appId, 'users', userId, 'settings', 'data');
+            const userSettingsSnap = await getDoc(userSettingsRef);
+            if (userSettingsSnap.exists()) {
+                userSettings = userSettingsSnap.data();
+            } else {
+                userSettings = { theme: 'light', isMinor: false };
+                await setDoc(userSettingsRef, userSettings);
+            }
+            applyTheme(userSettings.theme);
 
             if (!userDocSnap.exists()) {
                 if (window.location.pathname !== '/createprofile') {
@@ -235,6 +277,14 @@
                 } else {
                     handleUrlChange();
                 }
+            }
+        }
+        
+        function applyTheme(theme) {
+            if (theme === 'dark') {
+                body.classList.add('dark-mode');
+            } else {
+                body.classList.remove('dark-mode');
             }
         }
 
@@ -302,11 +352,17 @@
                 renderCreateProfilePage();
             } else if (path === '/editprofile') {
                 renderEditProfilePage();
+            } else if (path === '/settings') {
+                document.getElementById('nav-profiles').classList.replace('text-gray-500', 'text-blue-500');
+                renderSettingsPage();
             } else if (path.startsWith('/profiles/@')) {
                 renderUserProfilePage(path.split('/@')[1]);
             } else if (path.startsWith('/profiles')) {
                 document.getElementById('nav-profiles').classList.replace('text-gray-500', 'text-blue-500');
                 renderProfiles();
+            } else if (path.startsWith('/search')) {
+                document.getElementById('nav-search').classList.replace('text-gray-500', 'text-blue-500');
+                renderSearchPage();
             } else if (path.startsWith('/messages')) {
                 document.getElementById('nav-messages').classList.replace('text-gray-500', 'text-blue-500');
                 renderMessages();
@@ -325,6 +381,8 @@
             let newPath = '/';
             if (viewName === 'createprofile') newPath = '/createprofile';
             else if (viewName === 'editprofile') newPath = '/editprofile';
+            else if (viewName === 'settings') newPath = '/settings';
+            else if (viewName === 'search') newPath = '/search';
             else if (viewName === 'profiles') newPath = '/profiles';
             else if (viewName === 'user_profile' && data) newPath = `/profiles/@${data}`;
             else if (viewName === 'messages') newPath = '/messages';
@@ -443,7 +501,70 @@
                 showView('profiles');
             });
         }
+        
+        // Render the new Settings page
+        function renderSettingsPage() {
+            if (!userSettings) return;
+            mainContent.innerHTML = `
+                <div class="p-6 bg-white rounded-xl shadow-xl">
+                    <h2 class="text-2xl font-bold mb-4 text-center">Settings</h2>
+                    
+                    <div class="space-y-6">
+                        <!-- Theme Settings -->
+                        <div>
+                            <h3 class="text-lg font-semibold mb-2 text-gray-800">Theme</h3>
+                            <div class="flex items-center space-x-4">
+                                <label class="flex items-center space-x-2">
+                                    <input type="radio" name="theme-radio" value="light" class="text-blue-500" ${userSettings.theme === 'light' ? 'checked' : ''}>
+                                    <span class="text-gray-700">Light</span>
+                                </label>
+                                <label class="flex items-center space-x-2">
+                                    <input type="radio" name="theme-radio" value="dark" class="text-blue-500" ${userSettings.theme === 'dark' ? 'checked' : ''}>
+                                    <span class="text-gray-700">Dark</span>
+                                </label>
+                            </div>
+                        </div>
 
+                        <!-- Minor Status -->
+                        <div>
+                            <h3 class="text-lg font-semibold mb-2 text-gray-800">Post Interactions</h3>
+                            <label class="flex items-center space-x-2 cursor-pointer">
+                                <input type="checkbox" id="minor-checkbox" class="h-5 w-5 rounded text-blue-500 focus:ring-blue-500" ${userSettings.isMinor ? 'checked' : ''}>
+                                <span class="text-gray-700">I am a minor</span>
+                            </label>
+                            <p class="text-sm text-gray-500 mt-2">Checking this will disable likes, dislikes, comments, and sharing on your own posts.</p>
+                        </div>
+                    </div>
+
+                    <button id="save-settings-btn" class="w-full bg-blue-500 text-white py-2 px-4 rounded-lg font-semibold hover:bg-blue-600 transition-colors mt-6">Save Settings</button>
+                    <button onclick="window.history.back()" class="w-full mt-2 text-blue-500 hover:underline">Go Back</button>
+                </div>
+            `;
+
+            document.getElementById('save-settings-btn').addEventListener('click', async () => {
+                const themeRadios = document.getElementsByName('theme-radio');
+                let newTheme;
+                for (const radio of themeRadios) {
+                    if (radio.checked) {
+                        newTheme = radio.value;
+                        break;
+                    }
+                }
+                const isMinor = document.getElementById('minor-checkbox').checked;
+                
+                const settingsRef = doc(db, 'artifacts', appId, 'users', userId, 'settings', 'data');
+                await updateDoc(settingsRef, {
+                    theme: newTheme,
+                    isMinor: isMinor
+                });
+                
+                userSettings = { theme: newTheme, isMinor: isMinor };
+                applyTheme(newTheme);
+                await showModal("Success", "Settings saved successfully!");
+                showView('profiles');
+            });
+        }
+        
         // Render the main feed
         function renderFeed() {
             mainContent.innerHTML = `
@@ -491,7 +612,7 @@
                         profiles[snap.ref.parent.parent.id] = profileData; // Key by user ID
                     }
                 });
-
+                
                 const sortedDocs = postDocs.sort((a, b) => b.data().createdAt?.toMillis() - a.data().createdAt?.toMillis());
                 
                 sortedDocs.forEach(doc => {
@@ -504,6 +625,7 @@
                     const isOwner = post.userId === userId;
                     const commentsDisabled = post.commentsDisabled || false;
                     const commentsLocked = post.commentsLocked || false;
+                    const isMinor = userSettings.isMinor;
 
                     const postElement = document.createElement('div');
                     postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
@@ -511,6 +633,8 @@
                     
                     const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
                     
+                    const showInteractions = !isOwner || !isMinor;
+
                     postElement.innerHTML = `
                         <div class="flex items-start justify-between">
                             <div class="flex items-center space-x-3 mb-2 cursor-pointer">
@@ -530,9 +654,11 @@
                                     <button class="refresh-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-id="${postId}">
                                         <i class="fa-solid fa-arrows-rotate mr-2"></i> Refresh Post
                                     </button>
+                                    ${showInteractions ? `
                                     <button class="share-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors">
                                         <i class="fa-solid fa-share mr-2"></i> Share Post
                                     </button>
+                                    ` : ''}
                                     <!-- Only show these options to the post owner -->
                                     ${isOwner ? `
                                         <button class="lock-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-locked="${commentsLocked}">
@@ -552,6 +678,7 @@
                             </div>
                         </div>
                         <p class="text-gray-700 leading-relaxed mb-4">${post.content}</p>
+                        ${showInteractions ? `
                         <div class="flex items-center justify-around text-gray-500 text-sm">
                             <button class="like-btn flex items-center space-x-1 hover:text-red-500 transition-colors" data-id="${postId}">
                                 <i class="fa-regular fa-heart"></i>
@@ -568,6 +695,7 @@
                             </button>
                             ` : ''}
                         </div>
+                        ` : ''}
                         ${!commentsDisabled ? `
                         <div id="comments-section-${postId}" class="mt-4 hidden">
                             ${!commentsLocked ? `
@@ -634,10 +762,12 @@
                     if (!commentsLocked && !commentsDisabled) {
                         const commentInput = commentsSection.querySelector('input');
                         const commentSendBtn = commentsSection.querySelector('button');
-                        commentSendBtn.addEventListener('click', () => addComment(postId, commentInput));
-                        commentInput.addEventListener('keypress', (e) => {
-                            if (e.key === 'Enter') addComment(postId, commentInput);
-                        });
+                        if (commentSendBtn) {
+                             commentSendBtn.addEventListener('click', () => addComment(postId, commentInput));
+                             commentInput.addEventListener('keypress', (e) => {
+                                 if (e.key === 'Enter') addComment(postId, commentInput);
+                             });
+                        }
                     }
 
                     // Real-time updates for likes, dislikes, and comments counts
@@ -831,10 +961,12 @@
                                 
                                 const replyInput = replyForm.querySelector('input');
                                 const replySendBtn = replyForm.querySelector('button');
-                                replySendBtn.addEventListener('click', () => addComment(postId, replyInput, comment.id));
-                                replyInput.addEventListener('keypress', (e) => {
-                                    if (e.key === 'Enter') addComment(postId, replyInput, comment.id);
-                                });
+                                if (replySendBtn) {
+                                     replySendBtn.addEventListener('click', () => addComment(postId, replyInput, comment.id));
+                                     replyInput.addEventListener('keypress', (e) => {
+                                         if (e.key === 'Enter') addComment(postId, replyInput, comment.id);
+                                     });
+                                }
                             }
                         });
                     }
@@ -927,6 +1059,125 @@
             document.getElementById('new-post-content').value = '';
         }
         
+        // Render the search page
+        function renderSearchPage() {
+             mainContent.innerHTML = `
+                <div class="p-4">
+                    <div class="flex items-center space-x-2 mb-4 bg-white p-2 rounded-xl shadow-md">
+                        <i class="fa-solid fa-magnifying-glass text-gray-400"></i>
+                        <input type="text" id="search-input" class="flex-1 p-1 bg-transparent border-none focus:outline-none text-gray-700" placeholder="Search for posts or users...">
+                    </div>
+                    
+                    <div id="search-results" class="space-y-6">
+                        <div id="user-results" class="bg-white p-4 rounded-xl shadow-md hidden">
+                            <h3 class="text-lg font-semibold text-gray-800 mb-2">Users</h3>
+                            <div id="users-list" class="space-y-4"></div>
+                        </div>
+                        <div id="post-results" class="bg-white p-4 rounded-xl shadow-md hidden">
+                            <h3 class="text-lg font-semibold text-gray-800 mb-2">Posts</h3>
+                            <div id="posts-list" class="space-y-4"></div>
+                        </div>
+                        <p id="search-placeholder" class="text-center text-gray-500 mt-8">Start typing to search...</p>
+                    </div>
+                </div>
+            `;
+            
+            const searchInput = document.getElementById('search-input');
+            let debounceTimer;
+            searchInput.addEventListener('input', () => {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    performSearch(searchInput.value.toLowerCase().trim());
+                }, 500); // Debounce for 500ms
+            });
+        }
+        
+        async function performSearch(query) {
+            const userResultsContainer = document.getElementById('user-results');
+            const usersList = document.getElementById('users-list');
+            const postResultsContainer = document.getElementById('post-results');
+            const postsList = document.getElementById('posts-list');
+            const searchPlaceholder = document.getElementById('search-placeholder');
+
+            usersList.innerHTML = '';
+            postsList.innerHTML = '';
+
+            if (query.length < 2) {
+                userResultsContainer.classList.add('hidden');
+                postResultsContainer.classList.add('hidden');
+                searchPlaceholder.textContent = 'Start typing to search...';
+                searchPlaceholder.classList.remove('hidden');
+                return;
+            }
+
+            searchPlaceholder.classList.add('hidden');
+            
+            // Search Users
+            const userPromises = [];
+            const usersColRef = collection(db, 'artifacts', appId, 'users');
+            const allUsersSnap = await getDocs(usersColRef);
+            allUsersSnap.forEach(userDoc => {
+                userPromises.push(getDoc(doc(userDoc.ref, 'profile', 'data')));
+            });
+            
+            const userProfiles = await Promise.all(userPromises);
+            
+            userProfiles.forEach(snap => {
+                if (snap.exists()) {
+                    const profileData = snap.data();
+                    if (profileData.isBanned) return;
+                    if (profileData.username.includes(query) || (profileData.displayName && profileData.displayName.toLowerCase().includes(query))) {
+                         const userElement = document.createElement('div');
+                         userElement.className = "flex items-center space-x-4 p-2 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer";
+                         userElement.innerHTML = `
+                            <img src="${profileData?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                            <div>
+                                <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
+                                <p class="text-sm text-gray-500">@${profileData?.username}</p>
+                            </div>
+                         `;
+                         userElement.addEventListener('click', () => showView('user_profile', profileData.username));
+                         usersList.appendChild(userElement);
+                    }
+                }
+            });
+            
+            // Search Posts
+            const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+            const allPostsSnap = await getDocs(postsColRef);
+            
+            allPostsSnap.forEach(snap => {
+                const post = snap.data();
+                 if (post.content.toLowerCase().includes(query) || (post.username && post.username.toLowerCase().includes(query))) {
+                     const postElement = document.createElement('div');
+                     postElement.className = "p-2 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer";
+                     postElement.innerHTML = `
+                         <div class="flex items-center space-x-3 mb-1">
+                             <img src="${post.photoURL || 'https://placehold.co/32x32/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-8 h-8 rounded-full">
+                             <div>
+                                 <p class="font-semibold text-gray-800">${post.displayName || post.name}</p>
+                                 <p class="text-xs text-gray-500">@${post.username || 'unknown'}</p>
+                             </div>
+                         </div>
+                         <p class="text-gray-700 text-sm truncate w-full">${post.content}</p>
+                     `;
+                     postsList.appendChild(postElement);
+                 }
+            });
+
+            if (usersList.children.length > 0) {
+                userResultsContainer.classList.remove('hidden');
+            } else {
+                usersList.innerHTML = `<p class="text-center text-gray-500">No users found.</p>`;
+            }
+            
+            if (postsList.children.length > 0) {
+                postResultsContainer.classList.remove('hidden');
+            } else {
+                 postsList.innerHTML = `<p class="text-center text-gray-500">No posts found.</p>`;
+            }
+        }
+        
         function renderUserProfilePage(username) {
             mainContent.innerHTML = `<div class="p-6 text-center text-gray-500">Loading profile...</div>`;
             
@@ -955,14 +1206,21 @@
                         return;
                     }
 
+                    const isOwner = profileUserId === userId;
+
                     const profileHTML = `
-                        <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                        <div class="bg-white p-6 rounded-xl shadow-md mb-6 relative text-center">
+                            ${isOwner ? `
+                                <button id="settings-btn" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 transition-colors">
+                                    <i class="fa-solid fa-gear text-xl"></i>
+                                </button>
+                            ` : ''}
                             <img src="${profile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
                             <h2 class="text-xl font-bold text-gray-800">${profile?.displayName}</h2>
                             <p class="text-gray-600 mb-2">@${profile?.username}</p>
                             <p class="text-gray-600 mb-2">${profile?.bio}</p>
                             <div class="flex justify-center space-x-2 mt-4">
-                                ${profileUserId === userId ? `
+                                ${isOwner ? `
                                     <button id="edit-profile-btn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-full text-sm font-semibold hover:bg-gray-300 transition-colors">Edit Profile</button>
                                 ` : `
                                     <button id="message-user-btn" class="bg-blue-500 text-white px-4 py-2 rounded-full text-sm font-semibold hover:bg-blue-600 transition-colors">Message User</button>
@@ -973,13 +1231,16 @@
                     `;
                     mainContent.innerHTML = profileHTML;
                     
-                    if (profileUserId !== userId) {
-                         document.getElementById('message-user-btn')?.addEventListener('click', () => {
-                             startNewMessageByUsername(profile.username);
-                         });
-                    } else {
+                    if (isOwner) {
                          document.getElementById('edit-profile-btn')?.addEventListener('click', () => {
                             showView('editprofile');
+                         });
+                         document.getElementById('settings-btn')?.addEventListener('click', () => {
+                            showView('settings');
+                         });
+                    } else {
+                         document.getElementById('message-user-btn')?.addEventListener('click', () => {
+                             startNewMessageByUsername(profile.username);
                          });
                     }
                     
@@ -1005,7 +1266,10 @@
         function renderProfiles() {
             mainContent.innerHTML = `
                 <!-- Current User Profile -->
-                <div class="bg-white p-6 rounded-xl shadow-md mb-6 text-center">
+                <div class="bg-white p-6 rounded-xl shadow-md mb-6 relative text-center">
+                    <button id="settings-btn" class="absolute top-4 right-4 text-gray-500 hover:text-gray-700 transition-colors">
+                        <i class="fa-solid fa-gear text-xl"></i>
+                    </button>
                     <img src="${userProfile?.photoURL || 'https://placehold.co/100x100/A0AEC0/ffffff?text=U'}" alt="My Profile" class="w-24 h-24 rounded-full mx-auto mb-4 border-4 border-blue-500">
                     <h2 class="text-xl font-bold text-gray-800">${userProfile?.displayName}</h2>
                     <p class="text-gray-600 mb-2">@${userProfile?.username}</p>
@@ -1024,6 +1288,7 @@
             `;
             
             document.getElementById('edit-my-profile-btn').addEventListener('click', () => showView('editprofile'));
+            document.getElementById('settings-btn').addEventListener('click', () => showView('settings'));
             document.getElementById('share-my-profile-btn').addEventListener('click', () => {
                 const profileLink = `${window.location.origin}/profiles/@${userProfile.username}`;
                 navigator.clipboard.writeText(profileLink).then(() => {
