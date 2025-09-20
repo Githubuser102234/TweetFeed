@@ -533,14 +533,14 @@
                                     <button class="share-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors">
                                         <i class="fa-solid fa-share mr-2"></i> Share Post
                                     </button>
-                                    <button class="lock-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-locked="${commentsLocked}">
-                                        <i class="fa-solid fa-${commentsLocked ? 'unlock' : 'lock'} mr-2"></i> ${commentsLocked ? 'Unlock' : 'Lock'} Comments
-                                    </button>
-                                    <button class="disable-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-disabled="${commentsDisabled}">
-                                        <i class="fa-solid fa-${commentsDisabled ? 'comment' : 'comment-slash'} mr-2"></i> ${commentsDisabled ? 'Enable' : 'Disable'} Comments
-                                    </button>
                                     <!-- Only show these options to the post owner -->
                                     ${isOwner ? `
+                                        <button class="lock-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-locked="${commentsLocked}">
+                                            <i class="fa-solid fa-${commentsLocked ? 'unlock' : 'lock'} mr-2"></i> ${commentsLocked ? 'Unlock' : 'Lock'} Comments
+                                        </button>
+                                        <button class="disable-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-disabled="${commentsDisabled}">
+                                            <i class="fa-solid fa-${commentsDisabled ? 'comment' : 'comment-slash'} mr-2"></i> ${commentsDisabled ? 'Enable' : 'Disable'} Comments
+                                        </button>
                                         <button class="edit-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-id="${postId}">
                                             <i class="fa-solid fa-pen-to-square mr-2"></i> Edit Post
                                         </button>
