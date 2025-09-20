@@ -27,7 +27,7 @@
         }
     </style>
     <!-- Font Awesome for icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.3/css/all.min.css">
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
 
@@ -74,6 +74,18 @@
                 <div class="flex justify-center space-x-4">
                     <button id="modal-ok-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors">OK</button>
                     <button id="modal-cancel-btn" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400 transition-colors hidden">Cancel</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Modal for Editing Post Content -->
+        <div id="edit-post-modal" class="modal">
+            <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm text-center">
+                <h3 class="text-xl font-semibold mb-4 text-gray-800">Edit Post</h3>
+                <textarea id="edit-post-content" class="w-full h-32 p-2 text-gray-700 bg-gray-50 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"></textarea>
+                <div class="flex justify-center space-x-4">
+                    <button id="save-edit-btn" class="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition-colors">Save</button>
+                    <button id="cancel-edit-btn" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400 transition-colors">Cancel</button>
                 </div>
             </div>
         </div>
@@ -140,6 +152,12 @@
         const modalMessage = document.getElementById('modal-message');
         const modalOkBtn = document.getElementById('modal-ok-btn');
         const modalCancelBtn = document.getElementById('modal-cancel-btn');
+
+        const editPostModal = document.getElementById('edit-post-modal');
+        const editPostContentInput = document.getElementById('edit-post-content');
+        const saveEditBtn = document.getElementById('save-edit-btn');
+        const cancelEditBtn = document.getElementById('cancel-edit-btn');
+        let currentPostIdToEdit = null;
 
         // Show a custom modal instead of alert()
         function showModal(title, message, isConfirmation = false) {
@@ -489,10 +507,10 @@
 
                     const postElement = document.createElement('div');
                     postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
+                    postElement.setAttribute('data-post-id', postId); // Set post ID for easier targeting
                     
                     const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
                     
-                    // New Commenting and Likes UI
                     postElement.innerHTML = `
                         <div class="flex items-start justify-between">
                             <div class="flex items-center space-x-3 mb-2 cursor-pointer">
@@ -503,27 +521,35 @@
                                     <p class="text-xs text-gray-500">${timeString}</p>
                                 </div>
                             </div>
-                            ${isOwner ? `
-                                <div class="relative">
-                                    <button class="menu-btn text-gray-400 hover:text-gray-600 transition-colors" data-id="${postId}">
-                                        <i class="fa-solid fa-ellipsis-h"></i>
+                            <!-- Three-dot menu for all users -->
+                            <div class="relative">
+                                <button class="menu-btn text-gray-400 hover:text-gray-600 transition-colors" data-id="${postId}">
+                                    <i class="fa-solid fa-ellipsis-h"></i>
+                                </button>
+                                <div id="menu-${postId}" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50">
+                                    <button class="refresh-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-id="${postId}">
+                                        <i class="fa-solid fa-arrows-rotate mr-2"></i> Refresh Post
                                     </button>
-                                    <div id="menu-${postId}" class="hidden absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-50">
+                                    <button class="share-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors">
+                                        <i class="fa-solid fa-share mr-2"></i> Share Post
+                                    </button>
+                                    <button class="lock-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-locked="${commentsLocked}">
+                                        <i class="fa-solid fa-${commentsLocked ? 'unlock' : 'lock'} mr-2"></i> ${commentsLocked ? 'Unlock' : 'Lock'} Comments
+                                    </button>
+                                    <button class="disable-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-disabled="${commentsDisabled}">
+                                        <i class="fa-solid fa-${commentsDisabled ? 'comment' : 'comment-slash'} mr-2"></i> ${commentsDisabled ? 'Enable' : 'Disable'} Comments
+                                    </button>
+                                    <!-- Only show these options to the post owner -->
+                                    ${isOwner ? `
+                                        <button class="edit-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-id="${postId}">
+                                            <i class="fa-solid fa-pen-to-square mr-2"></i> Edit Post
+                                        </button>
                                         <button class="delete-post-btn w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-gray-100 transition-colors">
                                             <i class="fa-solid fa-trash mr-2"></i> Delete Post
                                         </button>
-                                        <button class="share-post-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors">
-                                            <i class="fa-solid fa-share mr-2"></i> Share Post
-                                        </button>
-                                        <button class="lock-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-locked="${commentsLocked}">
-                                            <i class="fa-solid fa-${commentsLocked ? 'unlock' : 'lock'} mr-2"></i> ${commentsLocked ? 'Unlock' : 'Lock'} Comments
-                                        </button>
-                                        <button class="disable-comments-btn w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors" data-disabled="${commentsDisabled}">
-                                            <i class="fa-solid fa-${commentsDisabled ? 'comment' : 'comment-slash'} mr-2"></i> ${commentsDisabled ? 'Enable' : 'Disable'} Comments
-                                        </button>
-                                    </div>
+                                    ` : ''}
                                 </div>
-                            ` : ''}
+                            </div>
                         </div>
                         <p class="text-gray-700 leading-relaxed mb-4">${post.content}</p>
                         <div class="flex items-center justify-around text-gray-500 text-sm">
@@ -583,6 +609,8 @@
                     }
 
                     // Add event listeners for menu actions
+                    postElement.querySelector('.refresh-post-btn')?.addEventListener('click', () => refreshPost(postId));
+                    postElement.querySelector('.edit-post-btn')?.addEventListener('click', () => showEditPostModal(postId, post.content));
                     postElement.querySelector('.delete-post-btn')?.addEventListener('click', () => deletePost(postId));
                     postElement.querySelector('.share-post-btn')?.addEventListener('click', () => showView('share', postId));
                     postElement.querySelector('.lock-comments-btn')?.addEventListener('click', () => toggleLockComments(postId, commentsLocked));
@@ -642,6 +670,62 @@
                 });
             });
         }
+        
+        async function refreshPost(postId) {
+            const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+            const postElement = document.querySelector(`[data-post-id="${postId}"]`);
+            if (!postElement) return;
+
+            // Simple loading state
+            const originalContent = postElement.querySelector('p').textContent;
+            postElement.querySelector('p').textContent = "Refreshing...";
+            postElement.classList.add('opacity-50', 'transition-opacity');
+            
+            try {
+                const docSnap = await getDoc(postDocRef);
+                if (docSnap.exists()) {
+                    const post = docSnap.data();
+                    postElement.querySelector('p').textContent = post.content;
+                } else {
+                     postElement.querySelector('p').textContent = "Post not found or deleted.";
+                     postElement.remove();
+                }
+            } catch (error) {
+                console.error("Error refreshing post:", error);
+                postElement.querySelector('p').textContent = originalContent; // Revert on error
+                await showModal("Error", "Failed to refresh post. Please try again.");
+            } finally {
+                postElement.classList.remove('opacity-50');
+            }
+        }
+
+        function showEditPostModal(postId, content) {
+            currentPostIdToEdit = postId;
+            editPostContentInput.value = content;
+            editPostModal.style.display = 'flex';
+        }
+
+        cancelEditBtn.addEventListener('click', () => {
+            editPostModal.style.display = 'none';
+        });
+
+        saveEditBtn.addEventListener('click', async () => {
+            if (!currentPostIdToEdit) return;
+            const newContent = editPostContentInput.value.trim();
+            if (newContent) {
+                const postDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', currentPostIdToEdit);
+                try {
+                    await updateDoc(postDocRef, { content: newContent });
+                    editPostModal.style.display = 'none';
+                    await showModal("Success", "Post updated successfully!");
+                } catch (error) {
+                    console.error("Error updating post:", error);
+                    await showModal("Error", "Failed to update post. Please try again.");
+                }
+            } else {
+                await showModal("Error", "Post content cannot be empty.");
+            }
+        });
         
         async function addComment(postId, inputElement, parentId = null) {
             const content = inputElement.value.trim();
