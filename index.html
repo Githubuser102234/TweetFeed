@@ -21,7 +21,7 @@
             background-color: #2d3748;
         }
         .dark-mode .bg-gray-50 {
-            background-color: #4a5568;
+            background-color: #2d3748;
         }
         .dark-mode .bg-gray-100 {
             background-color: #2d3748;
@@ -34,6 +34,10 @@
         }
         .dark-mode .border-gray-200 {
             border-color: #4a5568;
+        }
+        .dark-mode input, .dark-mode textarea {
+            background-color: #4a5568;
+            color: #e2e8f0;
         }
         .modal {
             display: none; /* Hidden by default */
@@ -603,13 +607,26 @@
                 const profilePromises = Array.from(authorIds).map(authorId => 
                     getDoc(doc(db, 'artifacts', appId, 'users', authorId, 'profile', 'data'))
                 );
+                const settingsPromises = Array.from(authorIds).map(authorId =>
+                    getDoc(doc(db, 'artifacts', appId, 'users', authorId, 'settings', 'data'))
+                );
+
                 const profileSnaps = await Promise.all(profilePromises);
+                const settingsSnaps = await Promise.all(settingsPromises);
 
                 const profiles = {};
                 profileSnaps.forEach(snap => {
                     if (snap.exists()) {
                         const profileData = snap.data();
-                        profiles[snap.ref.parent.parent.id] = profileData; // Key by user ID
+                        profiles[snap.ref.parent.parent.id] = profileData;
+                    }
+                });
+
+                const authorSettings = {};
+                settingsSnaps.forEach(snap => {
+                    if (snap.exists()) {
+                        const settingsData = snap.data();
+                        authorSettings[snap.ref.parent.parent.id] = settingsData;
                     }
                 });
                 
@@ -619,13 +636,14 @@
                     const post = doc.data();
                     const postId = doc.id;
                     const authorProfile = profiles[post.userId] || { isBanned: false };
+                    const authorSetting = authorSettings[post.userId] || { isMinor: false };
 
                     if (authorProfile.isBanned) return;
                     
                     const isOwner = post.userId === userId;
                     const commentsDisabled = post.commentsDisabled || false;
                     const commentsLocked = post.commentsLocked || false;
-                    const isMinor = userSettings.isMinor;
+                    const isAuthorMinor = authorSetting.isMinor;
 
                     const postElement = document.createElement('div');
                     postElement.className = "bg-white p-4 rounded-xl shadow-md mb-4";
@@ -633,7 +651,7 @@
                     
                     const timeString = post.createdAt ? new Date(post.createdAt.toMillis()).toLocaleString() : 'Just now';
                     
-                    const showInteractions = !isOwner || !isMinor;
+                    const showInteractions = !isAuthorMinor;
 
                     postElement.innerHTML = `
                         <div class="flex items-start justify-between">
@@ -678,12 +696,12 @@
                             </div>
                         </div>
                         <p class="text-gray-700 leading-relaxed mb-4">${post.content}</p>
-                        ${showInteractions ? `
                         <div class="flex items-center justify-around text-gray-500 text-sm">
                             <button class="like-btn flex items-center space-x-1 hover:text-red-500 transition-colors" data-id="${postId}">
                                 <i class="fa-regular fa-heart"></i>
                                 <span class="like-count">0</span>
                             </button>
+                            ${showInteractions ? `
                             <button class="dislike-btn flex items-center space-x-1 hover:text-blue-500 transition-colors" data-id="${postId}">
                                 <i class="fa-regular fa-thumbs-down"></i>
                                 <span class="dislike-count">0</span>
@@ -694,9 +712,9 @@
                                 <span class="comment-count">0</span>
                             </button>
                             ` : ''}
+                            ` : ''}
                         </div>
-                        ` : ''}
-                        ${!commentsDisabled ? `
+                        ${showInteractions && !commentsDisabled ? `
                         <div id="comments-section-${postId}" class="mt-4 hidden">
                             ${!commentsLocked ? `
                             <div class="flex items-start space-x-2 mt-4">
@@ -759,7 +777,7 @@
                     }
 
                     // Add comment form listener
-                    if (!commentsLocked && !commentsDisabled) {
+                    if (commentsSection && !commentsLocked && !commentsDisabled) {
                         const commentInput = commentsSection.querySelector('input');
                         const commentSendBtn = commentsSection.querySelector('button');
                         if (commentSendBtn) {
@@ -1112,35 +1130,32 @@
 
             searchPlaceholder.classList.add('hidden');
             
-            // Search Users
-            const userPromises = [];
-            const usersColRef = collection(db, 'artifacts', appId, 'users');
-            const allUsersSnap = await getDocs(usersColRef);
-            allUsersSnap.forEach(userDoc => {
-                userPromises.push(getDoc(doc(userDoc.ref, 'profile', 'data')));
-            });
+            // Search Users - Corrected to use the usernames collection
+            const usernamesRef = collection(db, 'artifacts', appId, 'public', 'data', 'usernames');
+            const usernameQuery = query(usernamesRef);
+            const usernameSnap = await getDocs(usernameQuery);
             
-            const userProfiles = await Promise.all(userPromises);
-            
-            userProfiles.forEach(snap => {
-                if (snap.exists()) {
-                    const profileData = snap.data();
-                    if (profileData.isBanned) return;
-                    if (profileData.username.includes(query) || (profileData.displayName && profileData.displayName.toLowerCase().includes(query))) {
-                         const userElement = document.createElement('div');
-                         userElement.className = "flex items-center space-x-4 p-2 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer";
-                         userElement.innerHTML = `
-                            <img src="${profileData?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
-                            <div>
-                                <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
-                                <p class="text-sm text-gray-500">@${profileData?.username}</p>
-                            </div>
-                         `;
-                         userElement.addEventListener('click', () => showView('user_profile', profileData.username));
-                         usersList.appendChild(userElement);
+            for (const doc of usernameSnap.docs) {
+                const username = doc.id;
+                if (username.includes(query)) {
+                    const profileDataRef = doc(db, 'artifacts', appId, 'users', doc.data().userId, 'profile', 'data');
+                    const profileSnap = await getDoc(profileDataRef);
+                    if (profileSnap.exists()) {
+                        const profileData = profileSnap.data();
+                        const userElement = document.createElement('div');
+                        userElement.className = "flex items-center space-x-4 p-2 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer";
+                        userElement.innerHTML = `
+                           <img src="${profileData?.photoURL || 'https://placehold.co/40x40/A0AEC0/ffffff?text=U'}" alt="Profile" class="w-10 h-10 rounded-full">
+                           <div>
+                               <p class="font-semibold text-gray-800">${profileData?.displayName}</p>
+                               <p class="text-sm text-gray-500">@${profileData?.username}</p>
+                           </div>
+                        `;
+                        userElement.addEventListener('click', () => showView('user_profile', profileData.username));
+                        usersList.appendChild(userElement);
                     }
                 }
-            });
+            }
             
             // Search Posts
             const postsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
